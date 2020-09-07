@@ -89,16 +89,19 @@ stargazer(vimp)
 ```
 
  
+```{r}
+xgboost_pre
+```
 
  
 ```{r, eval=T}
 xgb_crossvali =  function(n,df, y_var) {
-  smp_size <- floor(0.8* nrow(df)) 
+  smp_size = floor(0.8* nrow(df)) 
   set.seed(n)
-  training<- sample(seq_len(nrow(df)), size = smp_size)
+  training = sample(seq_len(nrow(df)), size = smp_size)
   test = seq_len(nrow(df))[-training] 
   
-  xgboost_LUR(df,  y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 3000, training=training, test=test, grepstring =varstring, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7 )
+  xgboost_LUR(df, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 3000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7 )
 } 
 
 
@@ -124,7 +127,7 @@ Vrf
 #server: combine
 ```
 
-```{r, eval=F}
+```{r, eval=T}
 LA_crossvali =  function(n,df, y_var) {
   smp_size <- floor(0.8 * nrow(df)) 
   set.seed(n)
@@ -133,20 +136,9 @@ LA_crossvali =  function(n,df, y_var) {
   Lasso(df, y_varname= y_var, training=training, test=test, grepstring =varstring)
 } 
   VLA = lapply(1:20, df = merged, y_var = y_var, LA_crossvali)
-  VLA = data.frame(RF = rowMeans(data.frame(VLA)))
+  VLA = data.frame(LA = rowMeans(data.frame(VLA)))
   VLA
 
- 
-Vrf = lapply(1:20, df = merged, y_var = y_var,rf_crossvali)
-Vrf = data.frame(RF = rowMeans(data.frame(Vrf)))
-Vrf
 ```
- 
-Tuning parameter 'gamma' was held constant at a value of 3
-Tuning parameter 'colsample_bytree' was held constant at
- a value of 1
-Tuning parameter 'min_child_weight' was held constant at a value of 1
-RMSE was used to select the optimal model using the smallest value.
-The final values used for the model were nrounds = 200, max_depth = 3, eta = 0.051, gamma = 3, colsample_bytree =
- 1, min_child_weight = 1 and subsample = 0.9.
+
 

@@ -22,4 +22,13 @@ model
 
 ggplot(model)
 ggsave("xgboosttunning.png")
+
+
+
+#Tuning parameter 'gamma' was held constant at a value of 3
+#Tuning parameter 'colsample_bytree' was held constant at a value of 1
+#Tuning parameter 'min_child_weight' was held constant at a value of 1
+#RMSE was used to select the optimal model using the smallest value.
+#The final values used for the model were nrounds = 200, max_depth = 3, eta = 0.051, gamma = 3, colsample_bytree =
+#  1, min_child_weight = 1 and subsample = 0.9.
  
