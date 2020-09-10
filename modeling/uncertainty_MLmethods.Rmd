@@ -1,0 +1,175 @@
+---
+title: "cross validation"
+output:
+  html_document:
+    df_print: paged
+---
+ 
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path=paste0('global_crossvali',"/"),
+                      echo=F, warning=FALSE, message=FALSE, dev = "png", include = T)
+```
+ 
+Required packages
+```{r, include=F}
+ipak <- function(pkg){
+ 
+   new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+   if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE , repos='http://cran.muenster.r-project.org')
+  sapply(pkg, require, character.only = TRUE)
+}
+packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer")
+ipak(packages)
+install_github("mengluchu/APMtools") 
+
+ 
+library(APMtools)
+ 
+```
+
+Variables used:
+```{r}
+resolution =100
+y_var = "mean_value"
+prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
+
+varstring = paste(prestring,y_var,sep="|")
+
+```
+
+ 
+
+prepare the dataset for modeling 
+```{r}
+merged = read.csv("~/Documents/GitHub/uncertainty/DENL17_uc.csv")
+merged = merged%>%dplyr::select(matches(varstring))%>%  na.omit() 
+names(merged)
+```
+```{r 100m}
+if (resolution ==100)
+{
+  merged = merged%>%select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
+}
+names(merged)
+```
+ 
+ 
+```{r}
+LA_imp =  function(n,df, y_var) {
+  smp_size <- floor(0.8 * nrow(df)) 
+  set.seed(n)
+  training<- sample(seq_len(nrow(df)), size = smp_size)
+   
+  y_varname= y_var
+  grepstring =varstring
+  variabledf = df
+  prenres = paste(y_varname, "|", grepstring, sep = "")
+  pre_mat_all = subset_grep(variabledf, prenres)
+  pre_mat = pre_mat_all %>% dplyr::select(-y_varname)
+  pre_mat_tr = pre_mat[training, ]
+  y_tr_value = variabledf[training, y_varname] 
+  cvfit <- glmnet::cv.glmnet(as.matrix(pre_mat_tr), y_tr_value, 
+        type.measure = "mse", standardize = TRUE, alpha = 1, 
+        lower.limit = 0)
+    
+  Lassoselected(cvfit)
+  
+} 
+  VLA = sapply(1:20, df = merged,   y_var = y_var, LA_imp)
+ 
+  a= table(do.call(c,VLA))  
+  #a =a[a>=5]  
+  a = a[order(a,decreasing = T)]
+  stargazer(data.frame(a),summary = F)
+```
+ 
+Variable importance: 20-times bootstrapping
+```{r, eval=T}
+Impor_val =  function(n,df, method , y_var  ) {
+
+  set.seed(n)
+  smp_size <- floor(0.8 * nrow(df))
+
+training<- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+ 
+ 
+methodID = switch(method,  "xboost"=1,"rf" =2 ) 
+
+df = switch(methodID,  
+            xgboost_imp (variabledf= df, y_varname= y_var, max_depth =6, gamma=5, eta =0.007, nrounds = 3000, training=training, test=test, grepstring =varstring, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7),  
+            rf_imp(df, y_varname= y_var, training=training, test=test, grepstring =varstring,mtry = 34, numtrees = 1000) 
+) 
+return(df)
+} 
+ Vxb = data.frame(lapply(1:20, Impor_val, df= merged, "xboost" , y_var =y_var))
+ Vrf = data.frame(lapply(1:20, Impor_val, df = merged, "rf" , y_var = y_var)) 
+
+mimpVrf = apply(Vrf, 1, median)
+mimpxb = apply(Vxb, 1, median)
+ 
+ 
+xb = names(mimpxb[order(mimpxb,decreasing = T)]  )[1:20]
+rf = names(mimpVrf[order(mimpVrf,decreasing = T)] ) [1:20]
+vimp=cbind(rank = 1:20, xgboost = xb, randomforest = rf)
+#install.packages("stargazer")
+ 
+stargazer(vimp)
+```
+
+ 
+ 
+
+ 
+```{r, eval=T}
+xgb_crossvali =  function(n,df, y_var) {
+  smp_size = floor(0.8* nrow(df)) 
+  set.seed(n)
+  training = sample(seq_len(nrow(df)), size = smp_size)
+  test = seq_len(nrow(df))[-training] 
+  
+  xgboost_LUR(df, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 3000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7 )
+} 
+
+
+V2 = lapply(1:20, df = merged, y_var = y_var,xgb_crossvali)
+V2 = data.frame(XGB = rowMeans(data.frame(V2)))
+V2
+```
+ 
+```{r}
+rf_crossvali =  function(n,df, y_var) {
+  smp_size <- floor(0.8 * nrow(df)) 
+  set.seed(n)
+  training<- sample(seq_len(nrow(df)), size = smp_size)
+  test = seq_len(nrow(df))[-training] 
+  rf_LUR(df, numtrees =  1000, mtry = 34, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+} 
+
+ 
+Vrf = lapply(1:20, df = merged, y_var = y_var,rf_crossvali)
+Vrf = data.frame(RF = rowMeans(data.frame(Vrf)))
+Vrf
+
+#server: combine
+```
+
+```{r, eval=T}
+LA_crossvali =  function(n,df, y_var) {
+  smp_size <- floor(0.8 * nrow(df)) 
+  set.seed(n)
+  training<- sample(seq_len(nrow(df)), size = smp_size)
+  test = seq_len(nrow(df))[-training] 
+  Lasso(df, y_varname= y_var, training=training, test=test, grepstring =varstring)
+} 
+  VLA = lapply(1:20, df = merged, y_var = y_var, LA_crossvali)
+  VLA = data.frame(LA = rowMeans(data.frame(VLA)))
+  VLA
+```
+
+```{r}
+df = data.frame(cbind(VLA,Vrf, V2))
+stargazer(df,summary = F, digits = 2)
+```
+
