@@ -23,5 +23,5 @@ DENL_2017= read.csv("/Users/menglu/Documents/GitHub/uncertainty/DENL17_uc.csv")
 
 locations_sf = st_as_sf(DENL_2017, coords = c("Longitude","Latitude"), crs=4642)
 mapview(locations_sf)
-r = raster("/Users/menglu/Documents/GitHub/uncertainty/mean_NLDE.tif")
+r = raster("/Users/menglu/Downloads/mean_NLDE.tif")
 crop_center(r, 150,  vis= T)
