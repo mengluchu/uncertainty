@@ -22,15 +22,14 @@ ipak <- function(pkg){
 packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer")
 ipak(packages)
 install_github("mengluchu/APMtools") 
-
- 
 library(APMtools)
  
 ```
 
 Variables used:
 ```{r}
-resolution =100
+resolution =100 # resolution of grid
+nboot = 20 # number of bootstraps
 y_var = "mean_value"
 prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
 
@@ -38,23 +37,36 @@ varstring = paste(prestring,y_var,sep="|")
 
 ```
 
+```{r}
+mergedall = read.csv("~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_uc.csv")
+
+mergedall$AirQualityStationArea%>%table
+mergedall$AirQualityStationType%>%table
+ 
+mergedall%>%filter(AirQualityStationType=="traffic")%>%dplyr::select(wkd_day_value)%>%summary
+mergedall%>%filter(AirQualityStationType=="traffic")%>%dplyr::select(wkd_night_value)%>%summary
+mergedall%>%filter(AirQualityStationType=="background")%>%dplyr::select(wkd_day_value)%>%summary
+mergedall%>%filter(AirQualityStationType=="background")%>%dplyr::select(wkd_night_value)%>%summary
+```
  
 
 prepare the dataset for modeling 
 ```{r}
-merged = read.csv("~/Documents/GitHub/uncertainty/DENL17_uc.csv")
-merged = merged%>%dplyr::select(matches(varstring))%>%  na.omit() 
+merged = mergedall%>%dplyr::select(matches(varstring))%>%  na.omit() 
 names(merged)
 ```
 ```{r 100m}
 if (resolution ==100)
 {
-  merged = merged%>%select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
+  merged = merged%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
 }
 names(merged)
 ```
- 
- 
+
+
+
+
+
 ```{r}
 LA_imp =  function(n,df, y_var) {
   smp_size <- floor(0.8 * nrow(df)) 
@@ -76,7 +88,7 @@ LA_imp =  function(n,df, y_var) {
   Lassoselected(cvfit)
   
 } 
-  VLA = sapply(1:20, df = merged,   y_var = y_var, LA_imp)
+  VLA = sapply(1:nboot, df = merged,   y_var = y_var, LA_imp)
  
   a= table(do.call(c,VLA))  
   #a =a[a>=5]  
@@ -85,7 +97,7 @@ LA_imp =  function(n,df, y_var) {
 ```
  
 Variable importance: 20-times bootstrapping
-```{r, eval=T}
+```{r, eval=F}
 Impor_val =  function(n,df, method , y_var  ) {
 
   set.seed(n)
@@ -112,7 +124,7 @@ mimpxb = apply(Vxb, 1, median)
  
 xb = names(mimpxb[order(mimpxb,decreasing = T)]  )[1:20]
 rf = names(mimpVrf[order(mimpVrf,decreasing = T)] ) [1:20]
-vimp=cbind(rank = 1:20, xgboost = xb, randomforest = rf)
+vimp=cbind(rank = 1:nboot, xgboost = xb, randomforest = rf)
 #install.packages("stargazer")
  
 stargazer(vimp)
@@ -122,7 +134,7 @@ stargazer(vimp)
  
 
  
-```{r, eval=T}
+```{r, eval=F}
 xgb_crossvali =  function(n,df, y_var) {
   smp_size = floor(0.8* nrow(df)) 
   set.seed(n)
@@ -133,12 +145,12 @@ xgb_crossvali =  function(n,df, y_var) {
 } 
 
 
-V2 = lapply(1:20, df = merged, y_var = y_var,xgb_crossvali)
+V2 = lapply(1:nboot, df = merged, y_var = y_var,xgb_crossvali)
 V2 = data.frame(XGB = rowMeans(data.frame(V2)))
 V2
 ```
  
-```{r}
+```{r, eval = F}
 rf_crossvali =  function(n,df, y_var) {
   smp_size <- floor(0.8 * nrow(df)) 
   set.seed(n)
@@ -148,28 +160,155 @@ rf_crossvali =  function(n,df, y_var) {
 } 
 
  
-Vrf = lapply(1:20, df = merged, y_var = y_var,rf_crossvali)
+Vrf = lapply(1:nboot, df = merged, y_var = y_var,rf_crossvali)
 Vrf = data.frame(RF = rowMeans(data.frame(Vrf)))
 Vrf
 
 #server: combine
 ```
 
-```{r, eval=T}
+```{r, eval=F}
 LA_crossvali =  function(n,df, y_var) {
   smp_size <- floor(0.8 * nrow(df)) 
   set.seed(n)
   training<- sample(seq_len(nrow(df)), size = smp_size)
   test = seq_len(nrow(df))[-training] 
-  Lasso(df, y_varname= y_var, training=training, test=test, grepstring =varstring)
+  Lasso(df, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
 } 
-  VLA = lapply(1:20, df = merged, y_var = y_var, LA_crossvali)
+  VLA = lapply(1:nboot, df = merged, y_var = y_var, LA_crossvali)
   VLA = data.frame(LA = rowMeans(data.frame(VLA)))
   VLA
 ```
 
-```{r}
+```{r, eval=FALSE}
 df = data.frame(cbind(VLA,Vrf, V2))
 stargazer(df,summary = F, digits = 2)
 ```
+ 
+#### Spatial cross-validation
+Sp1 is purely spatial, sp2 and sp3 more specific for air quality, based on the local environment of ground stations. sp2 is easily applicable to the grid. sp3 depends on how to define e.g. traffic vs. background. 
 
+- sp1: blocked cv.
+- sp2: based on customized predictors (e.g. road_class_2_25>0 && population >1000)
+- sp3: based on known attribute e.g. AirqualityStationtypes
+  - AirqualityStationtypes: traffic, background, industrial
+  - human settlement types: urban or rurual  
+
+
+#### SP2 customized
+- "tr_hp": close to roads, high population
+- "tr_mlp": close to roads, middle-low population 
+- "f": far away from roads 
+```{r}
+sp2_cv =  function(n, df_type= c("tr_hp", "tr_mlp", "f") , df_model, y_var) {
+   
+set.seed(n)
+a= df_model%>%filter((road_class_2_100 > 0 | road_class_1_100 > 0|road_class_3_100>quantile(road_class_3_100, .75)) & population_1000 > quantile(population_1000, 0.75))  
+#traffic_lmpop 
+b= df_model%>%filter((road_class_2_100 > 0 | road_class_1_100 > 0 |road_class_3_100 > quantile(road_class_3_100, .75)) & population_1000 < quantile(population_1000, 0.5))   
+ 
+#fartr_highpop
+c= df_model%>%filter((road_class_2_100 == 0 & road_class_1_100 == 0 & road_class_3_100 < quantile(road_class_3_100, .5)))  
+
+ 
+methodID = switch(df_type,  "tr_hp"=1,"tr_mlp" =2,"f"=3  ) 
+totest = switch(methodID,a,b,c)
+
+ 
+others = setdiff(df_model, totest)
+orderedall=rbind(totest, others)
+nrow(orderedall)
+
+test_size = floor(0.07*nrow(df_model)) # 30  is about 20% of traffic, use a consistent size about 7% of data
+test = sample(nrow(totest), size = test_size) # sample 20% from e.g. traffic and then use others as training 
+training = setdiff(seq_len(nrow(df_model)), test)
+
+XGB = xgboost_LUR(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 3000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7) 
+RF = rf_LUR(orderedall, numtrees =  1000, mtry = 34, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+LA = Lasso(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
+cbind(LA,RF,XGB)
+}  
+
+tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+tr_lmp= lapply(1:nboot, df_type ="tr_mlp", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+far= lapply(1:nboot, df_type ="f", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+
+
+F1 = function(m, pre, f=quote(summary), nvaria) {apply(pre[, seq(m, ncol(pre), by =nvaria)], 1, f)}
+
+nv = 3# number of algorithms.
+cv_traffic= data.frame(sapply(1:nv, F1, tr_hp, mean,nv)) 
+names(cv_traffic) = paste0(c("LA", "RF", "XGB"), "_tr_hp")
+
+cv_bg = data.frame(sapply(1:nv, F1, tr_lmp, mean,nv)) 
+names(cv_bg) =  paste0(c("LA", "RF", "XGB"),"_tr_lmp")
+
+cv_far = data.frame(sapply(1:nv, F1, far, mean,nv)) 
+names(cv_far) =  paste0(c("LA", "RF", "XGB"),"_far")
+cbind(cv_traffic, cv_bg, cv_far)
+ 
+
+
+```
+
+##### SP3
+ 
+@params df_type: name of the type considered (e.g. traffic)
+@params dfall: mergedall
+@params df_model: merged
+
+```{r cv_sp3}
+sp3_cv =  function(n, df_type= c("traffic", "background", "industrial") , df_all, df_model, y_var) {
+  
+  set.seed(n)
+    
+  totest = df_all%>%filter(AirQualityStationType==df_type) %>%dplyr::select(colnames(df_model))
+  others = setdiff(df_model, totest)
+  orderedall=rbind(totest, others)
+   
+  test_size = floor(0.07 * nrow(df_model)) # 30  is about 20% of traffic, use a consistent size about 7% of data
+  test = sample(nrow(totest), size = test_size) # sample 20% from e.g. traffic and then use others as training 
+  training = setdiff(seq_len(nrow(df_model)), test)
+
+  XGB = xgboost_LUR(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 3000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7) 
+  RF = rf_LUR(orderedall, numtrees =  1000, mtry = 34, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+  LA = Lasso(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
+  cbind(LA,RF,XGB)
+}  
+
+sp_tra = lapply(1:nboot, df_type ="traffic", df_all = mergedall, df_model =merged, y_var = y_var, sp3_cv)%>%data.frame() 
+sp_bg= lapply(1:nboot, df_type ="background",df_all = mergedall, df_model =merged, y_var = y_var, sp3_cv)%>%data.frame() 
+
+
+F1 = function(m, pre, f=quote(summary), nvaria) {apply(pre[, seq(m, ncol(pre), by =nvaria)], 1, f)}
+
+nv = 3# number of algorithms.
+cv_traffic= data.frame(sapply(1:nv, F1, sp_tra, mean,nv)) 
+names(cv_traffic) = paste0(c("LA", "RF", "XGB"), "_tra")
+
+cv_bg = data.frame(sapply(1:nv, F1, sp_bg, mean,nv)) 
+names(cv_bg) =  paste0(c("LA", "RF", "XGB"),"_bg")
+cbind(cv_traffic, cv_bg)
+#server: combine
+```
+
+for a single method (testing purpose)
+```{r rf_sp3, eval = F}
+sp3_rf_cv =  function(n, df_type , df , y_var) {
+  set.seed(n)
+  test_size =  30 #floor(0.2*nrow(df_type)) #30 is about 20% of traffic, use a consistent size about 7% of data
+   
+  test = sample(nrow(df_type), size = test_size) # sample 20% from e.g. traffic and then use others as training 
+  training = setdiff(seq_len(nrow(df)), test)
+ 
+  rf_LUR(df, numtrees =  1000, mtry = 34, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+}  
+Vrf_tra = lapply(1:nboot, df =orderedall, df_type=traffic, y_var = y_var,sp3_rf_cv)
+Vrf_tra = data.frame(RF = rowMeans(data.frame(Vrf_tra)))
+Vrf_tra
+
+Vrf_b= lapply(1:nboot, df =orderedall, df_type=background, y_var = y_var,sp3_rf_cv)
+Vrf_b = data.frame(RF = rowMeans(data.frame(Vrf_b)))
+Vrf_b
+#server: combine
+```
