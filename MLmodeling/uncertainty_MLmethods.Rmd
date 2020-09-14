@@ -19,7 +19,7 @@ ipak <- function(pkg){
     install.packages(new.pkg, dependencies = TRUE , repos='http://cran.muenster.r-project.org')
   sapply(pkg, require, character.only = TRUE)
 }
-packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer")
+packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf", "CAST", "caret")
 ipak(packages)
 install_github("mengluchu/APMtools") 
 library(APMtools)
@@ -53,21 +53,24 @@ mergedall%>%filter(AirQualityStationType=="background")%>%dplyr::select(wkd_nigh
 prepare the dataset for modeling 
 ```{r}
 merged = mergedall%>%dplyr::select(matches(varstring))%>%  na.omit() 
-names(merged)
-```
+
 ```{r 100m}
 if (resolution ==100)
 {
   merged = merged%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
-}
+} 
 names(merged)
 ```
-
-
-
+ 
 
 
 ```{r}
+locations_sf = st_as_sf(mergedall, coords = c("Longitude","Latitude"), crs=4642)
+st_sf(locations_sf)
+```
+
+
+```{r, eval  = F}
 LA_imp =  function(n,df, y_var) {
   smp_size <- floor(0.8 * nrow(df)) 
   set.seed(n)
@@ -194,7 +197,44 @@ Sp1 is purely spatial, sp2 and sp3 more specific for air quality, based on the l
   - AirqualityStationtypes: traffic, background, industrial
   - human settlement types: urban or rurual  
 
+##### Sp1
 
+Creating grid and add a column of cell id to dataframe 
+```{r creatgrid}
+grid1 = st_make_grid(locations_sf, 1)
+grid1%>%plot 
+grid1 = as(grid1, "Sp")
+stc = st_join(st_sf(grid1), locations_sf,join=st_intersects )
+stc$grp = sapply(st_equals(stc), max)
+ 
+plot(stc["grp"], col = sf.colors(10))
+merged2 = stc%>%select(c(colnames(merged), grp))
+```
+
+Train using caret, and CAST to quickly create index for it,which applys caret createFolds
+
+```{r}
+indices = CreateSpacetimeFolds(merged2,
+  spacevar = "grp",
+  timevar = NA,
+  k = 10,
+  class = NA,
+  seed = 1
+)
+merged3 = merged2%>%select(c(colnames(merged)))
+st_geometry(merged3) <- NULL
+predic = merged3%>%dplyr::select(-y_var)
+model_LLO = train(predic, merged3[,y_var],
+                   method="rf",tuneGrid=data.frame("mtry"=34), importance=TRUE,
+                   trControl=trainControl(method="cv",
+                                          index = indices$index))
+
+model_LLO
+```
+
+
+
+ 
 #### SP2 customized
 - "tr_hp": close to roads, high population
 - "tr_mlp": close to roads, middle-low population 
