@@ -19,7 +19,7 @@ ipak <- function(pkg){
     install.packages(new.pkg, dependencies = TRUE , repos='http://cran.muenster.r-project.org')
   sapply(pkg, require, character.only = TRUE)
 }
-packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf", "CAST", "caret")
+packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf", "CAST", "caret", "quantregForest", "pdp")
 ipak(packages)
 install_github("mengluchu/APMtools") 
 library(APMtools)
@@ -29,7 +29,7 @@ library(APMtools)
 Variables used:
 ```{r}
 resolution =100 # resolution of grid
-nboot = 20 # number of bootstraps
+nboot = 2  # number of bootstraps
 y_var = "mean_value"
 prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
 
@@ -53,8 +53,7 @@ mergedall%>%filter(AirQualityStationType=="background")%>%dplyr::select(wkd_nigh
 prepare the dataset for modeling 
 ```{r}
 merged = mergedall%>%dplyr::select(matches(varstring))%>%  na.omit() 
-
-```{r 100m}
+ 
 if (resolution ==100)
 {
   merged = merged%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
@@ -66,7 +65,7 @@ names(merged)
 
 ```{r}
 locations_sf = st_as_sf(mergedall, coords = c("Longitude","Latitude"), crs=4642)
-st_sf(locations_sf)
+ 
 ```
 
 
@@ -202,8 +201,7 @@ Sp1 is purely spatial, sp2 and sp3 more specific for air quality, based on the l
 Creating grid and add a column of cell id to dataframe 
 ```{r creatgrid}
 grid1 = st_make_grid(locations_sf, 1)
-grid1%>%plot 
-grid1 = as(grid1, "Sp")
+grid1%>%plot  
 stc = st_join(st_sf(grid1), locations_sf,join=st_intersects )
 stc$grp = sapply(st_equals(stc), max)
  
@@ -352,3 +350,232 @@ Vrf_b = data.frame(RF = rowMeans(data.frame(Vrf_b)))
 Vrf_b
 #server: combine
 ```
+
+
+#### more on random forest
+##### 1. test the number of variables needed and pdp
+##### 2. uncertainty assessment: quantile rf
+
+1. If using OOB, more variables (> larger than about 20) may always lead to error increase, because each tree is weaker, but when aggregating them the error may be different, therefore here using CV. No big difference between 25-50. May just leave all in as the spatial pattern will be different. 
+
+```{r}
+n =1
+df =merged
+set.seed(n)
+smp_size <- floor(0.8 * nrow(df)) 
+
+training<- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+ 
+y_denl = df[,y_var]
+y_denl_test = y_denl[test] 
+x_p = df%>%dplyr::select(-y_var) 
+s.seq <- sort(c( seq(10, 40, by = 3), 
+                  seq(41, ncol(x_p), by = 5) ), decreasing = T)
+
+# collect results in list
+qrf.elim <- oob.mse <-cv<- list()
+
+# save model and OOB error of current fit  
+
+ 
+ini = ranger(x=x_p, y=y_denl, num.threads = 10, # set the number of CPUs
+                             ,importance = "permutation")
+qrf.elim[[1]] <- ini
+oob.mse[[1]] <- qrf.elim[[1]]$prediction.error
+cv[[1]] <- sqrt(qrf.elim[[1]]$prediction.error)+1
+
+l.covar.sel <- ncol(x_p)
+
+# Iterate through number of retained covariates           
+for( ii in 1:length(s.seq) ){
+  # Get importance, decreasingly ordered
+ 
+  t.imp <- qrf.elim[[ii]]$variable.importance[ 
+    order(qrf.elim[[ii]]$variable.importance, decreasing = T) ]
+
+  qrf.elim[[ii+1]] <- ranger(y = y_denl, x= x_p[, names(t.imp[1:s.seq[ii]])], num.trees = 1000,
+                             
+                             num.threads = 20, # set the number of CPUs
+                             importance = "permutation")
+  oob.mse[[ii+1]] <- qrf.elim[[ii+1]]$prediction.error
+  out = rf_LUR(df[, c(names(t.imp[1:s.seq[ii]]), y_var)], numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+  cv[[ii+1]] = out[1]
+  
+}
+
+# Prepare a data frame for plot
+elim.oob <- data.frame(elim.n = c(ncol(x_p), s.seq[1:length(s.seq)]), 
+                       elim.OOBe = unlist(oob.mse), cv = unlist(cv) )
+
+
+## ----plot-selection-path,fig.align='center',echo=FALSE,fig.height = 5,out.width='0.8\\textwidth',fig.cap = "Path of out-of-bag mean squared error as covariates are removed. Minimum is found at 55 covariates."----
+
+plot(elim.oob$elim.n[2:(length(elim.oob$elim.n) )], elim.oob$cv[2:(length(elim.oob$elim.n))], 
+     ylab = "cv (rmse)",
+     xlab = "n covariates", 
+     pch = 20)
+abline(v = elim.oob$cv[ which.min(elim.oob$cv)], lty = "dotted")
+ 
+```
+
+2. As the last step is always the same as linear regression (as we take the mean), the unaggregated predictions (second last layer, or terninal node response value) may be used for uncertainty assessment. Does this applys to all the ML method?
+
+```{r, eval=FALSE}
+rf.selected <- qrf.elim[[ which.min(elim.oob$elim.OOBe)]]
+
+t.imp <- rf.selected$variable.importance[ 
+  order(rf.selected$variable.importance, decreasing = T)]
+
+# 6 most important covariates
+t.6 <- names( t.imp[ 1:6 ] )
+
+# Create partial dependence plots for the 6 most important covariates 
+# list with 6 plots
+l.plots <- lapply(t.6, 
+                  function(n.var){ 
+                    plotPartial(partial(rf.selected, 
+                                        pred.var = n.var, 
+                                        train =x_p ))   } )
+# Create layout for the resulting trellis plots (Package lattice)
+grid.arrange(l.plots[[1]], l.plots[[2]], l.plots[[3]], 
+             l.plots[[4]], l.plots[[5]], l.plots[[6]], ncol = 2)
+
+
+```
+
+
+```{r}
+## ----quantRF,cache=TRUE-------------------------------------------
+# Fit quantile regression forest 
+
+quantRF <- ranger(x = x_p[training,],
+                     y = y_denl[training], mtry = 34, num.trees = 1000,
+                     quantreg = T) 
+# compute predictions (mean) for each validation site
+pred <- predict(quantRF, data = x_p[test,], what = mean)
+
+
+## ----investigate-single-point,echo=FALSE,fig.pos='!h',fig.height=5,fig.width=4,fig.align='center', out.width='0.4\\textwidth',fig.cap= "Histogram of predictive distribution for one single prediction point (dotted lines: 90 \\% prediction interval, dashed line: mean prediction)."----
+
+## predict 0.01, 0.02,..., 0.99 quantiles for validation data
+pred.distribution <- predict(quantRF,
+                                data = x_p[test,], 
+                                type = "quantiles",
+                                quantiles = seq(0.01, 0.99, by = 0.01))
+
+# plot predictive distribution for one site
+ 
+hist( pred.distribution$predictions[1,], 
+      col = "grey", main = "",
+      xlab = "predicted NO2", breaks = 12)
+
+# add 90 % prediction interval and mean (dashed) to plot
+abline(v = c( pred.distribution$predictions[1, "quantile= 0.05"],
+              pred.distribution$predictions[1, "quantile= 0.95"]), 
+       lty = "dotted")
+abline(v = pred$predictions[1], lty = "dashed")
+
+
+## ----create-intervall-plot,fig.height=5,fig.align='center',echo=FALSE, out.width='0.8\\textwidth',fig.cap= "Coverage of 90 \\%-prediction intervals computed by model-based boostrap."----
+
+# get 90% quantiles for each point
+t.quant90 <- cbind( 
+  pred.distribution$predictions[, "quantile= 0.05"],
+  pred.distribution$predictions[, "quantile= 0.95"])
+
+# get index for ranking in the plot
+t.ix <- sort( pred$predictions, index.return = T )$ix
+
+# plot predictions in increasing order
+plot(
+  pred$predictions[t.ix], type = "n",
+  ylim = range(c(t.quant90,  pred$predictions, y_denl[test])),
+  xlab = "rank of predictions",  # Me: predictors?
+  ylab =  "NO2" 
+) 
+
+# add prediction intervals
+segments(
+  1:length( y_denl_test ),
+  t.lower <- (t.quant90[,1])[t.ix],
+  1:length(y_denl_test ),
+  t.upper <- (t.quant90[,2])[t.ix],
+  col = "grey"
+)
+
+# select colour for dots outside of intervals
+t.col <- sapply(
+  1:length( t.ix ),
+  function( i, x, lower, upper ){
+    as.integer( cut( x[i], c( -Inf, lower[i]-0.000001, 
+                              x[i], upper[i]+0.000001, Inf ) ) )
+  },
+  x = y_denl_test[t.ix],
+  lower = t.lower, upper = t.upper
+)
+
+# add observed values on top 
+points(
+  1:length( y_denl_test) ,
+ y_denl_test[t.ix], cex = 0.7,
+  pch = c( 16, 1, 16)[t.col],
+  col = c( "darkgreen", "black", "darkgreen" )[t.col]
+)
+points(pred$predictions[t.ix], pch = 16, cex = 0.6, col = "grey60")
+
+# Add meaningfull legend
+legend( "topleft", 
+        bty = "n", cex = 0.85,
+        pch = c( NA, 16, 1, 16 ), pt.cex = 0.6, lwd = 1,
+        lty = c( 1, NA, NA, NA ), 
+        col = c( "grey", "grey60", "black", "darkgreen" ), 
+        seg.len = 0.8,
+        legend = c(
+          "90 %-prediction interval", 
+          paste0("prediction (n = ", nrow(x_p[test,]), ")"),
+          paste0("observation within interval (n = ", 
+                 sum( t.col %in% c(2) ), ")" ),
+          paste0("observation outside interval (n = ", 
+                 sum( t.col %in% c(1,3)), ", ", 
+                 round(sum(t.col %in% c(1,3)) / 
+                         nrow(x_p[training,])*100,1), "%)") )
+)
+
+
+
+```
+```{r, eval =F}
+## ----create-coverage-probabilty-plots,fig.align='center', fig.pos = "h", fig.width=4,fig.height=4.5, out.width='0.45\\textwidth',fig.cap="Coverage probabilities of one-sided prediction intervals computed for the validation data set of topsoil pH of the Berne study area."----
+
+# Coverage probabilities plot
+# create sequence of nominal probabilities 
+ss <- seq(0,1,0.01)
+# compute coverage for sequence
+t.prop.inside <- sapply(ss, function(ii){
+  boot.quantile <-  t( apply(ph.pred.distribution$predictions, 1, quantile, 
+                             probs = c(0,ii) ) )[,2]
+  return( sum(boot.quantile <= d.ph10.val$ph.0.10)/nrow(d.ph10.val) )
+})
+
+plot(x = ss, y = t.prop.inside[length(ss):1], 
+     type = "l", asp = 1,
+     ylab = "coverage probabilities", 
+     xlab="nominal probabilities" )
+# add 1:1-line  
+abline(0,1, lty = 2, col = "grey60")
+# add lines of the two-sided 90 %-prediction interval
+abline(v = c(0.05, 0.95), lty = "dotted", col = "grey20")
+
+
+## ----session-info,results='asis'----------------------------------
+toLatex(sessionInfo(), locale = FALSE)
+
+
+## ----export-r-code,echo=FALSE,result="hide"-----------------------
+# purl("OpenGeoHub-machine-learning-training-2.Rnw")
+
+```
+
+
+
