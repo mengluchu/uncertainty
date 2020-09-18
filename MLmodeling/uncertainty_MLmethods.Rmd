@@ -19,7 +19,7 @@ ipak <- function(pkg){
     install.packages(new.pkg, dependencies = TRUE , repos='http://cran.muenster.r-project.org')
   sapply(pkg, require, character.only = TRUE)
 }
-packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf", "CAST", "caret", "quantregForest", "pdp")
+packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf", "CAST", "caret", "quantregForest", "pdp", "h2o")
 ipak(packages)
 install_github("mengluchu/APMtools") 
 library(APMtools)
@@ -39,7 +39,7 @@ varstring = paste(prestring,y_var,sep="|")
 
 ```{r}
 mergedall = read.csv("~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_uc.csv")
-
+names(mergedall)
 mergedall$AirQualityStationArea%>%table
 mergedall$AirQualityStationType%>%table
  
@@ -60,8 +60,57 @@ if (resolution ==100)
 } 
 names(merged)
 ```
- 
 
+Initialize h2o, requires Java and JDK to be installed 
+```{r, eval=FALSE}
+h2o.init()
+
+x_var = setdiff(names(merged), y_var)
+merged_hex = as.h2o(merged)
+rf = h2o.randomForest(y = y_var, x= x_var, training_frame = merged_hex, ntrees =1000,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
+
+# CV
+xgb = h2o.xgboost(y = y_var, x= x_var, training_frame = merged_hex, nfolds =10, ,ntrees =3000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, keep_cross_validation_predictions = T, seed =1 )
+ 
+las = h2o.glm(y = y_var, x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
+
+get_h2o_pred = function(h2omodel) 
+{
+ cvpreds_id  = h2omodel@model$cross_validation_holdout_predictions_frame_id$name
+ as.data.frame(h2o.getFrame(cvpreds_id))$predict
+ }
+ 
+ 
+rf10f_pre =get_h2o_pred(rf)
+xgb10f_pre =get_h2o_pred(xgb)
+lasso10f_pre =get_h2o_pred(las)  
+
+# model and predict on all the data
+
+rf_all = h2o.randomForest(y = y_var, x= x_var, training_frame = merged_hex, ntrees =1000, seed =1 )
+
+rf_all_pre = as.data.frame(h2o.predict(object = rf_all, newdata = merged_hex))$predict 
+
+xgb_all = h2o.xgboost(y = y_var, x= x_var, training_frame = merged_hex ,ntrees =3000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, seed =1 )
+
+xgb_all_pre = as.data.frame(h2o.predict(object = xgb_all, newdata = merged_hex))$predict 
+  
+las_all = h2o.glm(y = y_var, x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =1, seed=1 )
+
+lasso_all_pre = as.data.frame(h2o.predict(object = las_all, newdata = merged_hex))$predict 
+ 
+# check
+cor(rf10f_pre,xgb10f_pre)
+cor(xgb10f_pre,lasso10f_pre)
+plot(rf10f_pre, rf_all_pre)
+plot(xgb10f_pre,xgb_all_pre)
+ 
+```
+
+```{r}
+addpre = cbind(mergedall,rf10f_pre,xgb10f_pre,lasso10f_pre,rf_all_pre,xgb_all_pre,lasso_all_pre)
+write.csv(addpre, "~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_uc.csv")
+```
 
 ```{r}
 locations_sf = st_as_sf(mergedall, coords = c("Longitude","Latitude"), crs=4642)
@@ -113,7 +162,7 @@ methodID = switch(method,  "xboost"=1,"rf" =2 )
 
 df = switch(methodID,  
             xgboost_imp (variabledf= df, y_varname= y_var, max_depth =6, gamma=5, eta =0.007, nrounds = 3000, training=training, test=test, grepstring =varstring, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7),  
-            rf_imp(df, y_varname= y_var, training=training, test=test, grepstring =varstring,mtry = 34, numtrees = 1000) 
+            rf_imp(df, y_varname= y_var, training=training, test=test, grepstring =varstring,mtry = NULL, numtrees = 1000) 
 ) 
 return(df)
 } 
@@ -158,7 +207,7 @@ rf_crossvali =  function(n,df, y_var) {
   set.seed(n)
   training<- sample(seq_len(nrow(df)), size = smp_size)
   test = seq_len(nrow(df))[-training] 
-  rf_LUR(df, numtrees =  1000, mtry = 34, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+  rf_LUR(df, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
 } 
 
  
@@ -223,7 +272,7 @@ merged3 = merged2%>%select(c(colnames(merged)))
 st_geometry(merged3) <- NULL
 predic = merged3%>%dplyr::select(-y_var)
 model_LLO = train(predic, merged3[,y_var],
-                   method="rf",tuneGrid=data.frame("mtry"=34), importance=TRUE,
+                   method="rf",tuneGrid=data.frame("mtry"=NULL), importance=TRUE,
                    trControl=trainControl(method="cv",
                                           index = indices$index))
 
@@ -262,7 +311,7 @@ test = sample(nrow(totest), size = test_size) # sample 20% from e.g. traffic and
 training = setdiff(seq_len(nrow(df_model)), test)
 
 XGB = xgboost_LUR(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 3000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7) 
-RF = rf_LUR(orderedall, numtrees =  1000, mtry = 34, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+RF = rf_LUR(orderedall, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
 LA = Lasso(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
 cbind(LA,RF,XGB)
 }  
@@ -309,7 +358,7 @@ sp3_cv =  function(n, df_type= c("traffic", "background", "industrial") , df_all
   training = setdiff(seq_len(nrow(df_model)), test)
 
   XGB = xgboost_LUR(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 3000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7) 
-  RF = rf_LUR(orderedall, numtrees =  1000, mtry = 34, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+  RF = rf_LUR(orderedall, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
   LA = Lasso(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
   cbind(LA,RF,XGB)
 }  
@@ -339,7 +388,7 @@ sp3_rf_cv =  function(n, df_type , df , y_var) {
   test = sample(nrow(df_type), size = test_size) # sample 20% from e.g. traffic and then use others as training 
   training = setdiff(seq_len(nrow(df)), test)
  
-  rf_LUR(df, numtrees =  1000, mtry = 34, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+  rf_LUR(df, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
 }  
 Vrf_tra = lapply(1:nboot, df =orderedall, df_type=traffic, y_var = y_var,sp3_rf_cv)
 Vrf_tra = data.frame(RF = rowMeans(data.frame(Vrf_tra)))
@@ -450,7 +499,7 @@ grid.arrange(l.plots[[1]], l.plots[[2]], l.plots[[3]],
 # Fit quantile regression forest 
 
 quantRF <- ranger(x = x_p[training,],
-                     y = y_denl[training], mtry = 34, num.trees = 1000,
+                     y = y_denl[training], mtry = NULL, num.trees = 1000,
                      quantreg = T) 
 # compute predictions (mean) for each validation site
 pred <- predict(quantRF, data = x_p[test,], what = mean)

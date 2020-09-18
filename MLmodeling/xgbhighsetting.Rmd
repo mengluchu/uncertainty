@@ -1,0 +1,299 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+---
+title: "NLDE crossvalidation hourly 9"
+output:
+  html_document:
+    df_print: paged
+---
+ 
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path=paste0('hourly_8',"/"),
+                      echo=F, warning=FALSE, message=FALSE, dev = "pdf", include = T)
+```
+ 
+Required packages
+```{r, include=F}
+ipak <- function(pkg){
+ 
+   new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+   if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE , repos='http://cran.muenster.r-project.org')
+  sapply(pkg, require, character.only = TRUE)
+}
+packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "raster", "rasterVis", "rgdal","Matrix","xgboost",  "glmnet", "ranger", "randomForest"  
+,"tidyverse" )
+ipak(packages)
+#install_github("mengluchu/APMtools") 
+ 
+library(APMtools)
+```
+
+```{r}
+# choose "value_mean for the mean of all hours, for different hours: X9_mean_value, X10_mean_value 
+sr =  stack("~/Documents/GitHub/nijmegen/predictorsmay20")  
+ 
+#use this to merge roads if needed: sr[[names(sr)[grepl("road_class",names(sr))]]]
+sr3 = sr[[names(sr)[grepl("road_class_3_",names(sr))]]]
+sr4 = sr[[names(sr)[grepl("road_class_4_",names(sr))]]]
+sr5 = sr[[names(sr)[grepl("road_class_5_",names(sr))]]]
+sr6 = sr[[names(sr)[grepl("road_class_1_|road_class_2_|temp|indu|wind|trop|Rsp|pop|OMI",names(sr))]]]
+sr345 =sr3+sr4+sr5
+names(sr345) = gsub("_1_","_M345_",names(sr3))
+srmerged  = stack(sr345,sr6)
+names(srmerged)
+
+
+# names(merged) =  gsub("population_1000", "pop1k", names(merged)) #  
+# names(merged) =  gsub("population_3000", "pop3k", names(merged)) #  
+# names(merged) =  gsub("population_5000", "pop5k", names(merged)) #  
+
+```
+
+```{r}
+
+prestring =  "road|pop|temp|wind|RSp|OMI|eleva|indu|trop|" 
+
+```
+
+```{r}
+predictors = read.csv ("~/Documents/GitHub/nijmegen/metendet_data2020.csv",stringsAsFactors = F)
+predictors <- as.data.frame(sapply(predictors, as.numeric))
+
+# no2 measurements 
+value  = read.csv("~/Documents/Github/nijmegen/DENLjuly.csv", sep = ";")
+value_mean = value%>%dplyr::select(X10_mean_value,X11_mean_value,X7_mean_value,X8_mean_value,X9_mean_value)%>%apply(1,mean)
+value$value_mean = value_mean
+
+#assign id and merge
+value$id = 1:nrow(value)
+merged0 = merge(value, predictors, by = "id")
+#check 
+all.equal(merged0$lon.x,merged0$lon.y)
+merged0%>%nrow()
+ 
+# only predictors, and coordinates  
+mpredictors = merged0[, c(3,4,28:112)]
+# mean over all hours 
+ 
+
+```
+```{r}
+xgbname=c()
+for(whichhour in 8:10)
+{y_var = paste0("X",whichhour, "_mean_value")
+varstring = paste0(prestring,y_var)
+merged = data.frame(cbind(merged0%>%dplyr::select(y_var),  predictors))%>%na.omit()%>%unique()
+# merge road types to form a new road type
+merged   = merge_roads(merged ,c(3,4,5), keep = F)
+# merged = mergedsp %>% dplyr::select(-lon,-lat.x)
+names(merged) =  gsub("M345", "3", names(merged)) # note 3 is for M345
+ 
+ 
+xgbname[whichhour-7] = paste0("XGB:", whichhour," am.tif")
+ 
+#predicLA_RF_XGBtiles(df = merged, rasstack = srmerged, yname = y_var, xgbname=xgbname, rfname = rfname, laname = laname, ntree = 1000, mtry = 14, gamma = 1,  max_depth = 3, eta = 0.05, nthread = 4, nrounds = 200 )
+ 
+xgb_stack(sr=srmerged, df_var = merged, y_var = y_var, xgbname = xgbname[whichhour-7],
+        , subsample=0.7,
+  gamma = 5,  xgb_alpha = 2, xgb_lambda = 0, max_depth = 5, eta = 0.002, nrounds = 3000 )}
+```
+
+```{r prediction} 
+myTheme2 <- rasterTheme(region = c(brewer.pal(9, "YlGnBu"), "black","black"), strip.background = list(col = 'transparent'), 
+strip.border = list(col = 'transparent'),  axis.line = list(col = "transparent") )
+ my.at = seq(5, 60, by =5)
+  
+s = stack(xgbname)
+levelplot(s,par.settings=myTheme2, at = my.at, names.attr = c("8 am", "9 am", "10 am") )
+```
+ 
+bakfiets data, focus on morning because afternoon has too many missing data
+```{r}
+lf_lo = list.files("Bakfietsdata", pattern = "^.*morning.*.csv$", full.names = T)[-5]
+```
+
+clone raster
+```{r}
+s = projectRaster(s, crs=   CRS("+init=epsg:4326"))
+ 
+```
+
+rasterize bakfiets data
+```{r, eval  = F}
+rasterize_bak = function(baklist, projras, aggfun)
+    {
+      bakfile1 = read.csv(baklist) %>% filter(NO2>2)
+      coordinates(bakfile1) = ~Lon + Lat
+      rasbf = rasterize(bakfile1,projras,"NO2", fun = aggfun) 
+    }
+  avebak =  lapply(lf_lo, rasterize_bak, raster(xgbname[1]) , mean )%>%stack()
+  #avebak %>%plot()
+  avebf =avebak %>% calc(fun = mean)
+```
+
+rasterize temporally aggregated no2 bakfiets
+```{r bakfiets}
+library(lubridate)
+#xgbll = projectRaster(xgb, crs=   CRS("+init=epsg:4326"))
+   # min is the number of minutes to aggregate no2 
+rasterize_bak_min = function(baklist, projras, aggfun, agg_minu, hr)
+    {
+   
+      bakfile1 = read.csv(baklist) %>% filter(NO2>2)
+      time1=  as.POSIXlt(format(bakfile1$GPSTime, format = "%Y-%m-%d %H%M%S"))
+      hour=  time1$hour 
+      #bakfile1 = bakfile1%>% mutate(hours = hour)%>%group_by(hours)%>%mutate(hourlyNO2= mean(NO2, na.rm = T))
+  
+      lowtime <- min(time1)
+      hightime <- max(time1)
+
+# Set the minute and second to the nearest 10 minute value
+      minute(lowtime) <- floor(minute(lowtime)/10) * 10
+      minute(hightime) <- ceiling(minute(hightime)/10) * 10
+      second(lowtime) <- 0
+      second(hightime) <- 0
+
+# Set the breakpoints at 10 minute intervals
+     
+      breakpoints <- seq.POSIXt(lowtime, hightime, by = agg_minu *60) # one minute 60, 600 : 10 minutes , 1200 20  
+      bakfile1 = bakfile1%>%mutate(time=as.POSIXct(time1))%>%mutate(hours = hour)%>% filter( hour==hr)%>%mutate(aggretime =cut(time, breaks= breakpoints))%>%group_by(aggretime)%>%mutate(aggreNO2= mean(NO2, na.rm = T) )
+      coordinates(bakfile1) = ~Lon + Lat
+      rasbf = rasterize(bakfile1,projras,"aggreNO2", fun = aggfun) 
+    }
+  
+```
+ 
+Differences: bakfiets - modelprediction
+```{r dif}
+
+#'compare aggregated bakfiets and temporaly scaled global model prediction
+#preras: global model
+#bfras: bakfiets rasterized and averaged
+
+compareras_dif= function(bfras, preras){ 
+masked = mask(preras,bfras)
+dif = bfras-masked
+ 
+print(summary(dif)) 
+print(ncell(dif))
+dif
+}
+
+```
+
+regression residuals (bakfiets ~ modelpredictions)
+```{r}
+compareras_res= function(bfras, preras){
+ masked = mask(preras,bfras)
+#dif = mxgb - bfras
+ 
+ print(layerStats(stack(masked,bfras), "pearson", na.rm = T)[1] ) 
+ 
+reg = lm(raster::getValues(bfras)~ raster::getValues(masked), na.action = na.exclude) 
+print(summary(reg)$r.squared)
+re = residuals(reg)
+values(masked) = re
+masked
+}
+```
+
+## Calculate difference plot and residual plots, correlations
+Calculate bakfiets averaged over 4 days, aggregate to every 15 minuts and 25 m resolution. 
+
+```{r}
+s = projectRaster(s, crs=   CRS("+init=epsg:4326"))
+
+avebak = lapply(lf_lo,rasterize_bak_min, s[[1]], mean , agg_minu = 1, hr = whichhour)%>%stack()
+ 
+avebf = avebak %>% calc(fun = mean)
+ 
+```
+
+```{r map8am}
+myTheme2 <- rasterTheme(region = c(brewer.pal(9, "YlGnBu"), "black","black"), strip.background = list(col = 'transparent'), 
+            strip.border = list(col = 'transparent'),  axis.line = list(col = "transparent") )
+ my.at = seq(5, 60, by =5)
+ p.strip <- list(cex=1 , lines=1, fontface='bold')
+#levelplot(sr[["road_class_2_100"]],at = my.at, par.settings = myTheme2)
+levelplot(stack(avebf, s),at = my.at, par.settings = myTheme2, names.attr = c("Cargo-bike", "XGBoost", "Random Forest", "Lasso"),par.strip.text =p.strip)
+
+```
+
+
+```{r difplot}
+ 
+a = compareras_dif(avebf, s[[1]]) #xgb
+ 
+a2 = compareras_dif(avebf, s[[2]]) #rf
+ 
+a3 = compareras_dif(avebf,s[[3]]) #Lasso
+
+my.at = seq(-15, -6, by =2) 
+myTheme2 <- rasterTheme(region = c(brewer.pal(7, "Spectral")))
+ 
+stack(a, a2, a3)%>%levelplot(at = my.at, par.settings = myTheme2, names.attr = c( "xgboost", "random forest", "lasso"))
+
+```
+
+regression residuals
+```{r resplot}
+  #avebak %>%plot()
+
+a = compareras_res(avebf, s[[1]]) #xgb
+a2 = compareras_res(avebf, s[[2]]) #rf
+a3 = compareras_res(avebf, s[[3]]) #Lasso
+my.at = seq(-5, 5, by =1) 
+ 
+stack(a,a2,a3)%>%levelplot(at = my.at, par.settings = myTheme2, names.attr = c( "xgboost", "random forest", "lasso"))
+#ggsave("/Users/menglu/Documents/GitHub/nijmegen/nlde_vs_bak_res.png")
+```
+
+
+
+
+comparison, different temporal aggregations
+
+
+```{r}
+fitvalue = function(preras, bikeras)
+{
+  masked = mask(preras,avebf)
+  nonna <- Which(!is.na(masked), cells=TRUE)
+  pre =  masked[nonna] 
+  fitted( lm(bf~pre))
+}
+```
+
+
+```{r 1d}
+
+#'compare aggregated bakfiets and temporaly scaled global model prediction
+#preras: global model
+#bfras: bakfiets rasterized and averaged
+ 
+nonna <- Which(!is.na(avebf), cells=TRUE)
+bf = avebf[nonna] 
+```
+
+```{r 1d8am}
+ 
+bikepre = data.frame(pixel_id = 1 : length(bf), Cargo_bike = bf,  fitted_XGB = fitvalue(s[[1]]), fitted_RF = fitvalue(s[[2]]), fitted_Lasso = fitvalue(s[[3]]))
+
+df <- bikepre%>%  
+  gather(key = "variable", value = "value", -pixel_id)
+  
+               
+ggplot(df , aes(x=pixel_id, y =value)) + 
+  geom_line(aes(color = variable, linetype = variable)) + 
+    scale_color_brewer(name = paste0( "At ",whichhour, " a.m."), palette =  "Set2")+ 
+  scale_linetype_discrete(paste0( "At ",whichhour, " a.m."))+theme_classic()+ theme(
+  legend.title = element_text( size = 12),legend.text = element_text( size = 12), legend.position = c(0.9, 0.8))+
+  labs(y = "NO2 concentration")
+ggsave("modelfitted_bike1d.png", width = 12, height = 5)
+ 
+```
+
