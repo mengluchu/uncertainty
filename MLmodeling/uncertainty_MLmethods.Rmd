@@ -32,14 +32,15 @@ resolution =100 # resolution of grid
 nboot = 2  # number of bootstraps
 y_var = "mean_value"
 prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
-
 varstring = paste(prestring,y_var,sep="|")
-
 ```
 
 ```{r}
 mergedall = read.csv("~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_uc.csv")
-names(mergedall)
+```
+
+Data summary
+```{r, eval=FALSE} 
 mergedall$AirQualityStationArea%>%table
 mergedall$AirQualityStationType%>%table
  
@@ -50,9 +51,9 @@ mergedall%>%filter(AirQualityStationType=="background")%>%dplyr::select(wkd_nigh
 ```
  
 
-prepare the dataset for modeling 
+Prepare the dataset for modeling 
 ```{r}
-merged = mergedall%>%dplyr::select(matches(varstring))%>%  na.omit() 
+merged = mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
  
 if (resolution ==100)
 {
@@ -61,6 +62,7 @@ if (resolution ==100)
 names(merged)
 ```
 
+Use H2o for kfold CV and get predictions.
 Initialize h2o, requires Java and JDK to be installed 
 ```{r, eval=FALSE}
 h2o.init()
@@ -102,22 +104,22 @@ lasso_all_pre = as.data.frame(h2o.predict(object = las_all, newdata = merged_hex
 # check
 cor(rf10f_pre,xgb10f_pre)
 cor(xgb10f_pre,lasso10f_pre)
-plot(rf10f_pre, rf_all_pre)
+plot(mergedall$mean_value, lasso10f_pre)
 plot(xgb10f_pre,xgb_all_pre)
  
 ```
-
-```{r}
+Add predictions to the csv file (as requested by collaborator)
+```{r, eval = F}
 addpre = cbind(mergedall,rf10f_pre,xgb10f_pre,lasso10f_pre,rf_all_pre,xgb_all_pre,lasso_all_pre)
 write.csv(addpre, "~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_uc.csv")
 ```
 
+Sf object of data, for visualization and spatial cross-validation
 ```{r}
 locations_sf = st_as_sf(mergedall, coords = c("Longitude","Latitude"), crs=4642)
- 
 ```
 
-
+Variable importance of LA
 ```{r, eval  = F}
 LA_imp =  function(n,df, y_var) {
   smp_size <- floor(0.8 * nrow(df)) 
@@ -137,7 +139,6 @@ LA_imp =  function(n,df, y_var) {
         lower.limit = 0)
     
   Lassoselected(cvfit)
-  
 } 
   VLA = sapply(1:nboot, df = merged,   y_var = y_var, LA_imp)
  
@@ -147,7 +148,7 @@ LA_imp =  function(n,df, y_var) {
   stargazer(data.frame(a),summary = F)
 ```
  
-Variable importance: 20-times bootstrapping
+Variable importance of ML methods: 20-times bootstrapping
 ```{r, eval=F}
 Impor_val =  function(n,df, method , y_var  ) {
 
@@ -181,10 +182,7 @@ vimp=cbind(rank = 1:nboot, xgboost = xb, randomforest = rf)
 stargazer(vimp)
 ```
 
- 
- 
-
- 
+Bootstrapped cross-validation 
 ```{r, eval=F}
 xgb_crossvali =  function(n,df, y_var) {
   smp_size = floor(0.8* nrow(df)) 
@@ -254,7 +252,7 @@ grid1%>%plot
 stc = st_join(st_sf(grid1), locations_sf,join=st_intersects )
 stc$grp = sapply(st_equals(stc), max)
  
-plot(stc["grp"], col = sf.colors(10))
+#plot(stc["grp"])
 merged2 = stc%>%select(c(colnames(merged), grp))
 ```
 
@@ -272,7 +270,7 @@ merged3 = merged2%>%select(c(colnames(merged)))
 st_geometry(merged3) <- NULL
 predic = merged3%>%dplyr::select(-y_var)
 model_LLO = train(predic, merged3[,y_var],
-                   method="rf",tuneGrid=data.frame("mtry"=NULL), importance=TRUE,
+                   method="rf", ntree = 1000, importance=TRUE,
                    trControl=trainControl(method="cv",
                                           index = indices$index))
 
@@ -497,7 +495,14 @@ grid.arrange(l.plots[[1]], l.plots[[2]], l.plots[[3]],
 ```{r}
 ## ----quantRF,cache=TRUE-------------------------------------------
 # Fit quantile regression forest 
+smp_size <- floor(0.8 * nrow(df)) 
 
+training<- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+ 
+y_denl = df[,y_var]
+y_denl_test = y_denl[test] 
+x_p = df%>%dplyr::select(-y_var) 
 quantRF <- ranger(x = x_p[training,],
                      y = y_denl[training], mtry = NULL, num.trees = 1000,
                      quantreg = T) 
@@ -594,17 +599,17 @@ legend( "topleft",
 
 
 ```
-```{r, eval =F}
-## ----create-coverage-probabilty-plots,fig.align='center', fig.pos = "h", fig.width=4,fig.height=4.5, out.width='0.45\\textwidth',fig.cap="Coverage probabilities of one-sided prediction intervals computed for the validation data set of topsoil pH of the Berne study area."----
+```{r, eval =T}
+## ----create-coverage-probabilty-plots,fig.align='center', fig.pos = "h", fig.width=4,fig.height=4.5, out.width='0.45\\textwidth',fig.cap="Coverage probabilities of one-sided prediction intervals"----
 
 # Coverage probabilities plot
 # create sequence of nominal probabilities 
 ss <- seq(0,1,0.01)
 # compute coverage for sequence
 t.prop.inside <- sapply(ss, function(ii){
-  boot.quantile <-  t( apply(ph.pred.distribution$predictions, 1, quantile, 
+  boot.quantile <-  t( apply(pred.distribution$predictions, 1, quantile, 
                              probs = c(0,ii) ) )[,2]
-  return( sum(boot.quantile <= d.ph10.val$ph.0.10)/nrow(d.ph10.val) )
+  return( sum(boot.quantile <= y_denl_test)/nrow(x_p[test,]) )
 })
 
 plot(x = ss, y = t.prop.inside[length(ss):1], 
@@ -618,7 +623,7 @@ abline(v = c(0.05, 0.95), lty = "dotted", col = "grey20")
 
 
 ## ----session-info,results='asis'----------------------------------
-toLatex(sessionInfo(), locale = FALSE)
+#sessionInfo() 
 
 
 ## ----export-r-code,echo=FALSE,result="hide"-----------------------
