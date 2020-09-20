@@ -319,4 +319,16 @@ formula <- as.formula("y ~ 0 + f(lasso, model = 'clinear', range = c(0, 1), init
 VLA <- lapply(1:20, FUN = INLA_crossvali, d = d, formula = formula, covnames = covnames)
 (VLA <- data.frame(LA = rowMeans(data.frame(VLA))))
 
-
+# with stacked-learners using INLA
+#RMSE          7.1359408
+#RRMSE         0.2984085
+#IQR           7.1528871
+#rIQR          0.3269740
+#MAE           5.2621438
+#rMAE          0.2200768
+#rsq           0.6902379
+#explained_var 0.6910040
+#cor           0.8343859
+#covprob95     0.3582474
+#covprob90     0.3144330
+#covprob50     0.1484536
