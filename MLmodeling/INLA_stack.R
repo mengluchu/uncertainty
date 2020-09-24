@@ -383,3 +383,5 @@ covprob90     0.3211340
 covprob50     0.1453608'
 
 ensembleh2o <- lapply(1:2, FUN =ensemble, d = d )
+save(ensembleh2o, file = "ensembleh2o.rda")
+save(VLA, file = "VLA.rda")
