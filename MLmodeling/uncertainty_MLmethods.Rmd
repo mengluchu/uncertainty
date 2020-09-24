@@ -63,7 +63,7 @@ names(merged)
 ```
 
 Use H2o for kfold CV and get predictions.
-Initialize h2o, requires Java and JDK to be installed 
+Initialize h2o, requires Java and JDK to be installed. This part see colde INLA_stack
 ```{r, eval=FALSE}
 h2o.init()
 
@@ -76,6 +76,8 @@ xgb = h2o.xgboost(y = y_var, x= x_var, training_frame = merged_hex, nfolds =10, 
  
 las = h2o.glm(y = y_var, x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
 
+ensemble = h2o.stackedEnsemble(y = y_var, x= x_var, training_frame = merged_hex, base_models = c(rf, xgbl, las))
+
 get_h2o_pred = function(h2omodel) 
 {
  cvpreds_id  = h2omodel@model$cross_validation_holdout_predictions_frame_id$name
@@ -87,6 +89,7 @@ rf10f_pre =get_h2o_pred(rf)
 xgb10f_pre =get_h2o_pred(xgb)
 lasso10f_pre =get_h2o_pred(las)  
 
+h2o.removeAll()
 # model and predict on all the data
 
 rf_all = h2o.randomForest(y = y_var, x= x_var, training_frame = merged_hex, ntrees =1000, seed =1 )
@@ -97,16 +100,16 @@ xgb_all = h2o.xgboost(y = y_var, x= x_var, training_frame = merged_hex ,ntrees =
 
 xgb_all_pre = as.data.frame(h2o.predict(object = xgb_all, newdata = merged_hex))$predict 
   
-las_all = h2o.glm(y = y_var, x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =1, seed=1 )
+las_all = h2o.glm(y = y_var, x= x_var, training_frame = merged_hex, alpha = 1,   seed=1 )
 
 lasso_all_pre = as.data.frame(h2o.predict(object = las_all, newdata = merged_hex))$predict 
- 
+h2o.removeAll()
 # check
 cor(rf10f_pre,xgb10f_pre)
 cor(xgb10f_pre,lasso10f_pre)
 plot(mergedall$mean_value, lasso10f_pre)
 plot(xgb10f_pre,xgb_all_pre)
- 
+
 ```
 Add predictions to the csv file (as requested by collaborator)
 ```{r, eval = F}
