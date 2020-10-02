@@ -374,7 +374,7 @@ RRMSE         0.3005263
 IQR           7.3031196
 rIQR          0.3335296
 MAE           5.3181910
-rMAE          0.2224385
+rMAE          0.2224en85
 rsq           0.6859345
 explained_var 0.6869203
 cor           0.8322331
