@@ -23,7 +23,7 @@ packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "x
 ipak(packages)
 install_github("mengluchu/APMtools") 
 library(APMtools)
- 
+ls("package:APMtools") 
 ```
 
 Variables used:
@@ -35,9 +35,20 @@ prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
 varstring = paste(prestring,y_var,sep="|")
 ```
 
+Prepare the dataset for modeling 
+
 ```{r}
-mergedall = read.csv("~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_uc.csv")
-```
+mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+
+ 
+merged = mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
+ 
+if (resolution ==100)
+{
+  merged = merged%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
+} 
+names(merged)
+```  
 
 Data summary
 ```{r, eval=FALSE} 
@@ -51,16 +62,7 @@ mergedall%>%filter(AirQualityStationType=="background")%>%dplyr::select(wkd_nigh
 ```
  
 
-Prepare the dataset for modeling 
-```{r}
-merged = mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
- 
-if (resolution ==100)
-{
-  merged = merged%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
-} 
-names(merged)
-```
+
 
 Use H2o for kfold CV and get predictions.
 Initialize h2o, requires Java and JDK to be installed. This part see colde INLA_stack
@@ -230,6 +232,18 @@ LA_crossvali =  function(n,df, y_var) {
   VLA = lapply(1:nboot, df = merged, y_var = y_var, LA_crossvali)
   VLA = data.frame(LA = rowMeans(data.frame(VLA)))
   VLA
+```
+
+```{r}
+q_rf_crossvali =  function(n,df, y_var) {
+  smp_size <- floor(0.8 * nrow(df)) 
+  set.seed(n)
+  training<- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+  q_rf_LUR(df, numtrees =  1000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =varstring)} 
+qrf = lapply(1:nboot, df = merged, y_var = y_var, q_rf_crossvali )
+ qrf = data.frame(LA = rowMeans(data.frame(qrf)))
+ qrf
 ```
 
 ```{r, eval=FALSE}
@@ -537,6 +551,7 @@ abline(v = pred$predictions[1], lty = "dashed")
 ## ----create-intervall-plot,fig.height=5,fig.align='center',echo=FALSE, out.width='0.8\\textwidth',fig.cap= "Coverage of 90 \\%-prediction intervals computed by model-based boostrap."----
 
 # get 90% quantiles for each point
+ 
 t.quant90 <- cbind( 
   pred.distribution$predictions[, "quantile= 0.05"],
   pred.distribution$predictions[, "quantile= 0.95"])
