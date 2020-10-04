@@ -29,7 +29,7 @@ library(APMtools)
 Variables used:
 ```{r}
 resolution =100 # resolution of grid
-nboot = 2  # number of bootstraps
+nboot = 12  # number of bootstraps
 y_var = "mean_value"
 prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
 varstring = paste(prestring,y_var,sep="|")
@@ -187,13 +187,26 @@ stargazer(vimp)
 
 Bootstrapped cross-validation 
 ```{r, eval=F}
-xgb_crossvali =  function(n,df, y_var) {
+xgb_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
   smp_size = floor(0.8* nrow(df)) 
   set.seed(n)
-  training = sample(seq_len(nrow(df)), size = smp_size)
+  if(typecrossvali == "crossvalinotspatial"){
+    training <- sample(seq_len(nrow(d)), size = smp_size)
+  }
+  if(typecrossvali == "crossvalispatial"){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    prob_selection <- area(v)/sum(area(v))
+    training <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
+  }
   test = seq_len(nrow(df))[-training] 
   
-  xgboost_LUR(df, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 3000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7 )
+  xgboost_LUR(df, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds =1000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7 )
 } 
 
 
@@ -203,10 +216,23 @@ V2
 ```
  
 ```{r, eval = F}
-rf_crossvali =  function(n,df, y_var) {
+rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
   smp_size <- floor(0.8 * nrow(df)) 
   set.seed(n)
-  training<- sample(seq_len(nrow(df)), size = smp_size)
+  if(typecrossvali == "crossvalinotspatial"){
+    training <- sample(seq_len(nrow(d)), size = smp_size)
+  }
+  if(typecrossvali == "crossvalispatial"){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    prob_selection <- area(v)/sum(area(v))
+    training <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
+  }
   test = seq_len(nrow(df))[-training] 
   rf_LUR(df, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
 } 
@@ -220,10 +246,23 @@ Vrf
 ```
 
 ```{r, eval=F}
-LA_crossvali =  function(n,df, y_var) {
+LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
   smp_size <- floor(0.8 * nrow(df)) 
   set.seed(n)
-  training<- sample(seq_len(nrow(df)), size = smp_size)
+  if(typecrossvali == "crossvalinotspatial"){
+    training <- sample(seq_len(nrow(d)), size = smp_size)
+  }
+  if(typecrossvali == "crossvalispatial"){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    prob_selection <- area(v)/sum(area(v))
+    training <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
+  }
   test = seq_len(nrow(df))[-training] 
   Lasso(df, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
 } 
@@ -633,6 +672,8 @@ abline(v = c(0.05, 0.95), lty = "dotted", col = "grey20")
 # purl("OpenGeoHub-machine-learning-training-2.Rnw")
 
 ```
+
+
 
 
 

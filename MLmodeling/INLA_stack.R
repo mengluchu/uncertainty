@@ -3,6 +3,7 @@ library(INLA)
 library(APMtools)
 library(dplyr)
 library(h2o)
+library(dismo)
 #h2o.shutdown(prompt = F)
 h2o.init(nthreads=-1)
 
@@ -253,13 +254,30 @@ fnMLPredictionsAll = function(d, y_var="y", training, test, prestring =  "road|n
 #' If \code{covnames} includes an intercept, \code{d} needs to have column of 1s for the intercept
 #' @param covnames Vector with the names of the intercept and covariates to be included in the formula
 #' @return Vector with the cross-validation results
-INLA_crossvali =  function(n, d, formula, covnames){
+INLA_crossvali =  function(n, d, formula, covnames,typecrossvali = "crossvalispatial"){
  
   print(n)
   # Split data
   smp_size <- floor(0.8 * nrow(d)) 
   set.seed(n)
-  training <- sample(seq_len(nrow(d)), size = smp_size)
+ 
+  
+  if(typecrossvali == "crossvalinotspatial"){
+    training <- sample(seq_len(nrow(d)), size = smp_size)
+  }
+  if(typecrossvali == "crossvalispatial"){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    prob_selection <- area(v)/sum(area(v))
+    training <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
+  }
+  
+  
   test <- seq_len(nrow(d))[-training] 
   # Fit model
   dtraining <- d[training, ]
@@ -291,7 +309,7 @@ INLA_crossvali =  function(n, d, formula, covnames){
   
   return(val)
 } 
-
+ 
 ##################################################
 
 
@@ -317,8 +335,11 @@ ensemble= function(d, n, y_var= "y", prestring =  "road|nightlight|population|te
   las = h2o.glm(y = y_var , x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
   
   ens = h2o.stackedEnsemble(y = y_var, x= x_var, training_frame = merged_hex, base_models = c(rf, xgb, las))
-  pred = h2o.predict(object =ens, newdata = dptest)$predict 
+  dtest <- fnMLPredictionsAll(d=d, training = training, test = test)
   
+  pred = h2o.predict(object =ens, newdata = dtest)$predict 
+  head(pred)
+  pred = as.h2o(pred)
   val = APMtools::error_matrix(validation = ytest, prediction = pred)
   h2o.removeAll()
   return(val)
@@ -350,7 +371,7 @@ formula <- as.formula("y ~ 0 + f(lasso, model = 'clinear', range = c(0, 1), init
                          f(xgb, model = 'clinear', range = c(0, 1), initial = 1/3) + f(s, model = spde)") 
 
 # Cross-validation
-VLA <- lapply(1:2, FUN = INLA_crossvali, d = d, formula = formula, covnames = covnames)
+VLA <- lapply(1:20, FUN = INLA_crossvali, d = d, formula = formula, covnames = covnames)
 (VLA <- data.frame(LA = rowMeans(data.frame(VLA))))
 
 # with stacked-learners using INLA
