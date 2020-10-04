@@ -274,10 +274,23 @@ LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
 ```
 
 ```{r}
-q_rf_crossvali =  function(n,df, y_var) {
+q_rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
   smp_size <- floor(0.8 * nrow(df)) 
   set.seed(n)
-  training<- sample(seq_len(nrow(df)), size = smp_size)
+   if(typecrossvali == "crossvalinotspatial"){
+    training <- sample(seq_len(nrow(d)), size = smp_size)
+  }
+  if(typecrossvali == "crossvalispatial"){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    prob_selection <- area(v)/sum(area(v))
+    training <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
+  }
 test = seq_len(nrow(df))[-training] 
   q_rf_LUR(df, numtrees =  1000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =varstring)} 
 qrf = lapply(1:nboot, df = merged, y_var = y_var, q_rf_crossvali )
