@@ -19,7 +19,7 @@ ipak <- function(pkg){
     install.packages(new.pkg, dependencies = TRUE , repos='http://cran.muenster.r-project.org')
   sapply(pkg, require, character.only = TRUE)
 }
-packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf", "CAST", "caret", "quantregForest", "pdp", "h2o")
+packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf", "CAST", "caret", "quantregForest", "pdp", "h2o", "dismo")
 ipak(packages)
 install_github("mengluchu/APMtools") 
 library(APMtools)
@@ -40,13 +40,15 @@ Prepare the dataset for modeling
 ```{r}
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
 
- 
-merged = mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
- 
+
 if (resolution ==100)
 {
-  merged = merged%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
-} 
+  mergedall = mergedall%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
+}  
+
+merged = mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
+ 
+ 
 names(merged)
 ```  
 
@@ -188,12 +190,12 @@ stargazer(vimp)
 ```
 
 Bootstrapped cross-validation 
-```{r, eval=F}
-xgb_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
-  smp_size = floor(0.8* nrow(df)) 
+```{r xgb, eval=T}
+xgb_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial",coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+  smp_size = floor(0.2* nrow(df)) 
   set.seed(n)
   if(typecrossvali == "crossvalinotspatial"){
-    training <- sample(seq_len(nrow(d)), size = smp_size)
+    test<- sample(seq_len(nrow(df)), size = smp_size)
   }
   if(typecrossvali == "crossvalispatial"){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
@@ -201,12 +203,12 @@ xgb_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
     # To obtain a valid data set, X% of the observations are sampled without replacement where
     # each observation has a probability of selection proportional to the area of the Voronoi polygon
     # surrounding its location, that is, the area closest to the location relative to the surrounding points
-    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+    p <- matrix(coordi, ncol = 2)
     v <- dismo::voronoi(p) # extent?
     prob_selection <- area(v)/sum(area(v))
-    training <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
+   test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
   }
-  test = seq_len(nrow(df))[-training] 
+  training = seq_len(nrow(df))[-test] 
   
   xgboost_LUR(df, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds =1000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7 )
 } 
@@ -217,12 +219,12 @@ V2 = data.frame(XGB = rowMeans(data.frame(V2)))
 V2
 ```
  
-```{r, eval = F}
-rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
-  smp_size <- floor(0.8 * nrow(df)) 
+```{r, eval = T}
+rf_crossvali =  function(n,df, y_var, coordi = c(mergedall$Longitude, mergedall$Latitude), typecrossvali = "crossvalispatial") {
+  smp_size <- floor(0.2 * nrow(df)) 
   set.seed(n)
   if(typecrossvali == "crossvalinotspatial"){
-    training <- sample(seq_len(nrow(d)), size = smp_size)
+    test <- sample(seq_len(nrow(df)), size = smp_size)
   }
   if(typecrossvali == "crossvalispatial"){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
@@ -230,12 +232,13 @@ rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
     # To obtain a valid data set, X% of the observations are sampled without replacement where
     # each observation has a probability of selection proportional to the area of the Voronoi polygon
     # surrounding its location, that is, the area closest to the location relative to the surrounding points
-    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+     
+    p <- matrix(coordi, ncol = 2)
     v <- dismo::voronoi(p) # extent?
     prob_selection <- area(v)/sum(area(v))
-    training <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
+    test<- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
   }
-  test = seq_len(nrow(df))[-training] 
+  training = seq_len(nrow(df))[-test] 
   rf_LUR(df, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
 } 
 
@@ -247,12 +250,12 @@ Vrf
 #server: combine
 ```
 
-```{r, eval=F}
-LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
-  smp_size <- floor(0.8 * nrow(df)) 
+```{r, eval=T}
+LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+  smp_size <- floor(0.2 * nrow(df)) 
   set.seed(n)
   if(typecrossvali == "crossvalinotspatial"){
-    training <- sample(seq_len(nrow(d)), size = smp_size)
+    test <- sample(seq_len(nrow(df)), size = smp_size)
   }
   if(typecrossvali == "crossvalispatial"){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
@@ -260,25 +263,41 @@ LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
     # To obtain a valid data set, X% of the observations are sampled without replacement where
     # each observation has a probability of selection proportional to the area of the Voronoi polygon
     # surrounding its location, that is, the area closest to the location relative to the surrounding points
-    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+    p <- matrix(c(coordi), ncol = 2)
     v <- dismo::voronoi(p) # extent?
+    
     prob_selection <- area(v)/sum(area(v))
-    training <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
+    hist(prob_selection, n=500)
+    test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
   }
-  test = seq_len(nrow(df))[-training] 
+ 
+  #plot(v)
+  training = seq_len(nrow(df))[-test] 
+  
+  tr = p[training,] %>%  
+  sf::st_multipoint() 
+    
+  te = p[test,] %>% 
+  st_multipoint()
+  
+  p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
+  #plot(p)
   Lasso(df, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
+  
+  
 } 
   VLA = lapply(1:nboot, df = merged, y_var = y_var, LA_crossvali)
+
   VLA = data.frame(LA = rowMeans(data.frame(VLA)))
   VLA
 ```
 
 ```{r}
-q_rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
-  smp_size <- floor(0.8 * nrow(df)) 
+q_rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+  smp_size <- floor(0.2* nrow(df)) 
   set.seed(n)
    if(typecrossvali == "crossvalinotspatial"){
-    training <- sample(seq_len(nrow(d)), size = smp_size)
+    test <- sample(seq_len(nrow(df)), size = smp_size)
   }
   if(typecrossvali == "crossvalispatial"){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
@@ -286,12 +305,12 @@ q_rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial") {
     # To obtain a valid data set, X% of the observations are sampled without replacement where
     # each observation has a probability of selection proportional to the area of the Voronoi polygon
     # surrounding its location, that is, the area closest to the location relative to the surrounding points
-    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+    p <- matrix(coordi, ncol = 2)
     v <- dismo::voronoi(p) # extent?
     prob_selection <- area(v)/sum(area(v))
-    training <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
+    test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
   }
-test = seq_len(nrow(df))[-training] 
+training = seq_len(nrow(df))[-test] 
   q_rf_LUR(df, numtrees =  1000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =varstring)} 
 qrf = lapply(1:nboot, df = merged, y_var = y_var, q_rf_crossvali )
  qrf = data.frame(LA = rowMeans(data.frame(qrf)))
@@ -560,18 +579,111 @@ grid.arrange(l.plots[[1]], l.plots[[2]], l.plots[[3]],
 
 ```
 
+```{r quntileinlarf, eval = F}
+source("INLA_util.R")
+for (n in 1:2){
+covnames0 <- c("nightlight_450", "population_1000", "population_3000",
+               "road_class_1_5000", "road_class_2_100", "road_class_3_300", "trop_mean_filt",
+               "road_class_3_3000", "road_class_1_100", "road_class_3_100"
+               , "road_class_3_5000", "road_class_1_300", "road_class_1_500",
+                "road_class_2_1000", "nightlight_3150", "road_class_2_300", "road_class_3_1000", "temperature_2m_7")
 
-```{r}
-## ----quantRF,cache=TRUE-------------------------------------------
-# Fit quantile regression forest 
+
+df = mergedall
+set.seed(n)
 smp_size <- floor(0.8 * nrow(df)) 
 
-training<- sample(seq_len(nrow(df)), size = smp_size)
+training <- sample(seq_len(nrow(df)), size = smp_size)
 test = seq_len(nrow(df))[-training] 
  
 y_denl = df[,y_var]
 y_denl_test = y_denl[test] 
-x_p = df%>%dplyr::select(-y_var) 
+x_p = df%>%dplyr::select(matches(varstring))%>%dplyr::select(-y_var)
+ 
+quantRF <- ranger(x = x_p[training,],
+                     y = y_denl[training], mtry = NULL, num.trees = 1000,
+                     quantreg = T) 
+# compute predictions (mean) for each validation site
+pred <- predict(quantRF, data = x_p[test,], what = mean)
+
+
+## ----investigate-single-point,echo=FALSE,fig.pos='!h',fig.height=5,fig.width=4,fig.align='center', out.width='0.4\\textwidth',fig.cap= "Histogram of predictive distribution for one single prediction point (dotted lines: 90 \\% prediction interval, dashed line: mean prediction)."----
+
+## predict 0.01, 0.02,..., 0.99 quantiles for validation data
+pred.distribution <- predict(quantRF,
+                                data = x_p[test,], 
+                                type = "quantiles",
+                                quantiles = seq(0.01, 0.99, by = 0.01))
+
+ 
+ 
+t.quant90 <- cbind( 
+  pred.distribution$predictions[, "quantile= 0.05"],
+  pred.distribution$predictions[, "quantile= 0.95"])
+# INLA
+
+d <- df[, c("mean_value", "Longitude", "Latitude", covnames0)]
+
+# covnames0 <- NULL
+covnames <- c("b0", covnames0)  # covnames is intercept and covnames0
+
+d$y <- d$mean_value # response
+d$coox <- d$Longitude
+d$cooy <- d$Latitude
+d$b0 <- 1 # intercept
+d$real <- d$y
+dp <- d
+  dtraining <- d[training, ]
+  dptest <- dp[test, ]
+  # Fit model
+  lres <- fnFitModelINLA(dtraining, dptest, covnames, TFPOSTERIORSAMPLES = FALSE, formulanew = NULL)
+  # Get predictions
+  dptest <- fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+  coordi = c(mergedall$Longitude, mergedall$Latitude)
+  p <- matrix(coordi, ncol = 2)
+  tr = p[training,] %>%  
+  sf::st_multipoint() 
+    
+  te = p[test,] %>% 
+  st_multipoint()
+  
+  inla_90= cbind(dptest$pred_ll90,dptest$pred_ul90)
+  rf_90 = t.quant90
+    plot(inla_90[,1], ylim = c(-30,65), col = "red", typ = "l")
+lines(rf_90[,1])
+lines(inla_90[,2], col = "red")
+lines(rf_90[,2])
+  p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
+  plot(p)
+  val <- APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
+  val
+  val <- APMtools::error_matrix(validation =y_denl_test, prediction = predictions(pred))
+  val
+
+}
+```
+
+```{r}
+save(inla_90, file = "inla_90.rda")
+save(rf_90, file = "rf_90.rda")
+```
+ 
+
+```{r}
+## ----quantRF,cache=TRUE-------------------------------------------
+# Fit quantile regression forest 
+df = mergedall
+set.seed(1)
+smp_size <- floor(0.8 * nrow(df)) 
+
+training <- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+ 
+y_denl = df[,y_var]
+y_denl_test = y_denl[test] 
+x_p = df%>%dplyr::select(matches(varstring))%>%dplyr::select(-y_var)
+ 
+ 
 quantRF <- ranger(x = x_p[training,],
                      y = y_denl[training], mtry = NULL, num.trees = 1000,
                      quantreg = T) 
