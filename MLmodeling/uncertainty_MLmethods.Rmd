@@ -189,6 +189,8 @@ vimp=cbind(rank = 1:nboot, xgboost = xb, randomforest = rf)
 stargazer(vimp)
 ```
 
+
+
 Bootstrapped cross-validation 
 ```{r xgb, eval=T}
 xgb_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial",coordi = c(mergedall$Longitude, mergedall$Latitude)) {
