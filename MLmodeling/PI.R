@@ -27,7 +27,8 @@ if (resolution ==100)
   mergedall = mergedall%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
 } 
  
-mergedall$mean_value = sqrt(mergedall$mean_value) # normal 
+ 
+#mergedall$mean_value = sqrt(mergedall$mean_value) # normal 
 n =1
   covnames0 <- c("nightlight_450", "population_1000", "population_3000",
                  "road_class_1_5000", "road_class_2_100", "road_class_3_300", "trop_mean_filt",
@@ -53,10 +54,6 @@ n =1
                     quantreg = T) 
   # compute predictions (mean) for each validation site
   pred <- predict(quantRF, data = x_p[test,], what = mean)
-  
-  
-  ## ----investigate-single-point,echo=FALSE,fig.pos='!h',fig.height=5,fig.width=4,fig.align='center', out.width='0.4\\textwidth',fig.cap= "Histogram of predictive distribution for one single prediction point (dotted lines: 90 \\% prediction interval, dashed line: mean prediction)."----
-  
   ## predict 0.01, 0.02,..., 0.99 quantiles for validation data
   pred.distribution <- predict(quantRF,
                                data = x_p[test,], 
@@ -68,10 +65,12 @@ n =1
                       data = x_p[test,], type = "quantiles",what=mean)
 
   hist(pred.distribution$predictions[5,])
-  t.quant90 <- cbind( 
+
+    t.quant90 <- cbind( 
     pred.distribution$predictions[, "quantile= 0.05"],
     pred.distribution$predictions[, "quantile= 0.95"])
-  ## distforest
+ 
+   ## distforest
   distf <- distforest(mean_value~.,  data = varall)
   pre =  predict(distf, newdata = x_p[test,], type = "parameter")
   w =  predict(distf, newdata = x_p[test,], type = "weights")
@@ -80,8 +79,12 @@ n =1
   sigma_ =pre[["sigma"]]
   dist.q90 = cbind(mu_-1.64*sigma_, mu_+1.64*sigma_)
   
+  ### xgb
+  xgb = xgboost(data = as.matrix(x_p[training,]),
+         label = y_denl[training],  max_depth =6, gamma=5, eta =0.007, nrounds =1000, lambda = 2, alpha = 0, subsample = 0.7 )
   
-  
+  xgbpre = predict(xgb, as.matrix(x_p[test,]))
+  error_matrix(y_denl_test, xgbpre)
   # INLA
   
   
@@ -118,23 +121,27 @@ n =1
 
  
   #plot(inla_90[,1], ylim = c(min(y_denl_test)-1,max(y_denl_test)+1), col = "red", typ = "l")
-  df1 = cbind(data.frame(rf_90), data.frame(dist.q90), id = 1:nrow(data.frame(rf_90)),y_denl_test^2)
+  df1 = cbind(data.frame(rf_90), data.frame(dist.q90), id = 1:nrow(data.frame(rf_90)),y_denl_test )
  
   names(df1) = c("quantile_RF_L90", "quantile_RF_U90", "Distribution_RF_L90","Distribution_RF_U90", "id", "test")
-df1 = df1%>%  gather(variable, value, -id, -test )
-  df1$value = df1$value^2
-ggplot(df1)+aes(x = id, y = value, colour = variable)+geom_line()+
+  df1 = df1%>%  gather(variable, value, -id, -test )
+  
+
+  ggplot(df1)+aes(x = id, y = value, colour = variable)+geom_line()+
     geom_point(aes(y=test), colour= "black")+
   scale_color_brewer(palette="Spectral")+labs(x = "test points", y = "NO2", colour = "prediction intervals")
 ,aes(x = 1:lentgh(test), y = test ))
   #l
-  
-  ines(inla_90[,2], col = "red")
+  ggsave("dist_vs_qrf.png")
+ 
 plot(rf_90[,1]  ,ylim = c(min(y_denl_test)-1,max(y_denl_test)+1),  typ = "l")
    lines(rf_90[,2])
   lines(dist.q90[,1], col = "orange")
   lines(dist.q90[,2], col = "orange")
   points(y_denl_test)
+
+  
+  ############
   p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
   plot(p)
   #qqnorm(sqrt(df$mean_value))
