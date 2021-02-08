@@ -30,6 +30,7 @@ prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
 varstring = paste(prestring,y_var,sep="|")
  
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+
 # do it for 100 m resolution, get rid of 25m resolution variables. 
 if (resolution ==100)
 {
