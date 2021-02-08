@@ -15,7 +15,9 @@ ipak <- function(pkg){
     install.packages(new.pkg, dependencies = TRUE , repos='http://cran.muenster.r-project.org')
   sapply(pkg, require, character.only = TRUE)
 }
-packages <- c( "devtools", "dplyr","distrree","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf", "CAST", "caret", "quantregForest", "pdp", "h2o", "dismo")
+packages <- c( "devtools", "dplyr","distrree","data.table" , "scoringRules","ggplot2" , "RColorBrewer", 
+               "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf",
+               "quantregForest")
 ipak(packages)
 install_github("mengluchu/APMtools") 
 library(APMtools)
@@ -81,14 +83,14 @@ QRF_L90 <- predict(qrf, x_p[test,], what = 0.05)
 #  plot( conditionalQuantiles,pred.distribution$predictions[, "quantile= 0.95"])
   #hist(pred.distribution$predictions[5,])
  
-#################################  use Lasso to aggregate random forest trees, 
+#################################  use Lasso to aggregate random forest trees, implemented in APMtools 
 RF <- ranger(x = x_p[training,],
              y = y_denl[training], mtry = NULL, num.trees = 1000, min.node.size = 10)
 
 allp = predict(RF,x_p[training,],type = "response", predict.all = T)%>%predictions #get all the tree predictions, instead of the mean
 rpre= predict(RF,x_p[test,], predict.all=T)%>%predictions # get all the tree predictions
 
-#dim(allp2)  
+
   #allp = predict(RF,x_p[training,],type = "terminalNodes")$predictions
  # length(unique(allp[,39]))
   #plot(  apply(allp, 1, quantile, 0.05),pred.distribution$predictions[, "quantile= 0.05"])
@@ -201,29 +203,28 @@ plot(rf_90[,1]  ,ylim = c(min(y_denl_test)-1,max(y_denl_test)+1),  typ = "l")
 
   
   ############
-  p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
-  plot(p)
+
   #qqnorm(sqrt(df$mean_value))
   #qqline(sqrt(df$mean_value), col = "steelblue", lwd = 2)
   #shapiro.test(sqrt(df$mean_value))
-  shapiro.test(pred.distribution$predictions[5,])
+shapiro.test(pred.distribution$predictions[5,])
   
   # CRPS evaluration prob. forecast with scoring ranks: https://arxiv.org/pdf/1709.04743.pdf
-  distcrps = crps(y = y_denl_test, family = "norm", mean = mu_, sd = sigma_) 
-  rrfcrps = crps(y = y_denl_test, family = "norm", mean = rrf_mean, sd = rrf_sd) 
-  rrf2crps = crps(y = y_denl_test, family = "norm", mean = rrf2_mean, sd = rrf2_sd) 
+distcrps = crps(y = y_denl_test, family = "norm", mean = mu_, sd = sigma_) 
+rrfcrps = crps(y = y_denl_test, family = "norm", mean = rrf_mean, sd = rrf_sd) 
+rrf2crps = crps(y = y_denl_test, family = "norm", mean = rrf2_mean, sd = rrf2_sd) 
   
-  regcrps = crps(y = y_denl_test, family = "norm", mean = as.vector(predictions(mean_reg)), sd =as.vector(sd_reg$predictions)) 
+regcrps = crps(y = y_denl_test, family = "norm", mean = as.vector(predictions(mean_reg)), sd =as.vector(sd_reg$predictions)) 
   
-summary(  cbind(distcrps,rrfcrps,regcrps, rrf2crps))
-  plot(distcrps, regcrps)
-  mean_reg$predictions
+summary(cbind(distcrps,rrfcrps,regcrps, rrf2crps))
+plot(distcrps, regcrps)
+mean_reg$predictions
   #val <- APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
   #val
   #val <- APMtools::error_matrix(validation =y_denl_test, prediction = predictions(pred))
   #val
 
-  ### xgb
+  ### xgb: rf_lasso is better than rf, but xgb still is the best
   xgb = xgboost(data = as.matrix(x_p[training,]),
                 label = y_denl[training],  max_depth =6, gamma=5, eta =0.007, nrounds =1000, lambda = 2, alpha = 0, subsample = 0.7 )
   
@@ -234,7 +235,8 @@ summary(  cbind(distcrps,rrfcrps,regcrps, rrf2crps))
  ##################### 
 # INLA
  ################
-   source("~/Documents/GitHub/uncertainty/MLmodeling//INLA/INLA_util.R") 
+  # source("~/Documents/GitHub/uncertainty/MLmodeling//INLA/INLA_util.R") 
+source("https://raw.githubusercontent.com/mengluchu/uncertainty/master/MLmodeling//INLA/INLA_util.R")
   
   covnames0 <- c("nightlight_450", "population_1000", "population_3000",
                  "road_class_1_5000", "road_class_2_100", "road_class_3_300", "trop_mean_filt",
@@ -271,3 +273,5 @@ summary(  cbind(distcrps,rrfcrps,regcrps, rrf2crps))
   inla_90= cbind(dptest$pred_ll90,dptest$pred_ul90)
   #plot(inla_90[,1], ylim = c(min(y_denl_test)-1,max(y_denl_test)+1), col = "red", typ = "l")
   
+  p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
+  plot(p)
