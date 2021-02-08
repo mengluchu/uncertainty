@@ -21,21 +21,35 @@ mapviewOptions(
 
 merged = read.csv("~/Documents/GitHub/Global mapping/glo4variables.csv")
 EUmeta = read.csv("~/Downloads/non_backups/global_mapping_data/PanEuropean_metadata.csv")
+merged = read.csv("~/Documents/GitHub/Global mapping/glo_hr.csv")
 
+selectcountry=function (merged, EUmeta)
+{
 EU = merge(merged, EUmeta, by=c("Longitude", "Latitude"), all.x =T)
 EU = EU%>%filter(!is.na(Countrycode))
-
+EU%>%filter(Countrycode=="DE"|Countrycode=="NL")%>%select(-X) # with X (index) we cant do spread
+}
 #EU 
-locations_sf = st_as_sf(EU, coords = c("Longitude","Latitude"), crs=4642)
+#locations_sf = st_as_sf(EU, coords = c("Longitude","Latitude"), crs=4642)
  # https://leaflet-extras.github.io/leaflet-providers/preview/
-mapview(locations_sf)
+#mapview(locations_sf)
 
 #NL,DE
-DENL_2017 = EU%>%filter(Countrycode=="DE"|Countrycode=="NL")
 
+
+DENL_2017 = selectcountry(merged, EUmeta )
+DENL_2017spread = spread(DENL_2017, hours, wkd_hr_value) 
+
+ 
+write.csv(DENL_2017spread,"/Users/menglu/Documents/GitHub/mobiair/DENL17_hr_spread.csv")
+
+
+
+#write.csv(DENL_2017,"/Users/menglu/Documents/GitHub/DENL17_uc.csv")
+ 
 # two records with missing values in predictors are removed 
-DENL_2017%>%filter(DENL_2017!=-10000)
+DENL_2017=DENL_2017%>%filter(DENL_2017!=-10000)
 locations_sf = st_as_sf(DENL_2017, coords = c("Longitude","Latitude"), crs=4642)
 mapview(locations_sf)
 
-write.csv(DENL_2017,"/Users/menglu/Documents/GitHub/DENL17_uc.csv")
+#write.csv(DENL_2017,"/Users/menglu/Documents/GitHub/DENL17_hr.csv")
