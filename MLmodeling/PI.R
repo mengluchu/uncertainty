@@ -21,7 +21,6 @@ install_github("mengluchu/APMtools")
 library(APMtools)
 ls("package:APMtools") 
  
-
 resolution =100 # resolution of grid
 nboot = 12  # number of bootstraps
 y_var = "mean_value"
@@ -29,55 +28,52 @@ prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
 varstring = paste(prestring,y_var,sep="|")
  
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+# do it for 100 m resolution, get rid of 25m resolution variables. 
 if (resolution ==100)
 {
   mergedall = mergedall%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
 } 
+df = mergedall 
  
+#mergedall$mean_value = sqrt(mergedall$mean_value) # normalise for normal distribution 
+
+# to be written into a function
  
-#mergedall$mean_value = sqrt(mergedall$mean_value) # normal 
-n =1
-  covnames0 <- c("nightlight_450", "population_1000", "population_3000",
-                 "road_class_1_5000", "road_class_2_100", "road_class_3_300", "trop_mean_filt",
-                 "road_class_3_3000", "road_class_1_100", "road_class_3_100"
-                 , "road_class_3_5000", "road_class_1_300", "road_class_1_500",
-                 "road_class_2_1000", "nightlight_3150", "road_class_2_300", "road_class_3_1000", "temperature_2m_7")
+set.seed(1)
+smp_size <- floor(0.8 * nrow(df)) 
   
+training <- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
   
-  df = mergedall
-  set.seed(n)
-  smp_size <- floor(0.8 * nrow(df)) 
-  
-  training <- sample(seq_len(nrow(df)), size = smp_size)
-  test = seq_len(nrow(df))[-training] 
-  
-  y_denl = df[,y_var]
-  y_denl_test = y_denl[test] 
-  varall =df%>%dplyr::select(matches(varstring))
-  x_p = df%>%dplyr::select(matches(varstring))%>%dplyr::select(-y_var)
-  
-  # 1. use ranger quanreg = T
-  
-  quantRF <- ranger(x = x_p[training,],
+y_denl = df[,y_var]
+y_denl_test = y_denl[test] 
+varall =df%>%dplyr::select(matches(varstring))
+x_p = df%>%dplyr::select(matches(varstring))%>%dplyr::select(-y_var)
+
+############  
+## 1. use ranger quanreg = T
+######  
+quantRF <- ranger(x = x_p[training,],
                     y = y_denl[training], mtry = NULL, num.trees = 1000,
                     quantreg = T, min.node.size = 10) 
   # compute predictions (mean) for each validation site
-  pred <- predict(quantRF, data = x_p[test,], what = mean)
+pred <- predict(quantRF, data = x_p[test,], what = mean)
   ## predict 0.01, 0.02,..., 0.99 quantiles for validation data
-  pred.distribution <- predict(quantRF,
+pred.distribution <- predict(quantRF,
                                data = x_p[test,], 
                                type = "quantiles",
-                               quantiles = seq(0.01, 0.99, by = 0.01))
+                               quantiles = seq(0.01, 0.99, by = 0.01)) # get quantiles
  
-  sd_reg<- predict(quantRF,
+sd_reg<- predict(quantRF,
                    data = x_p[test,],type = "quantiles",what=sd)
-  mean_reg <- predict(quantRF,
+mean_reg <- predict(quantRF,
                       data = x_p[test,], type = "quantiles",what=mean)
-  t.quant90 <- cbind( 
+t.quant90 <- cbind( 
     pred.distribution$predictions[, "quantile= 0.05"],
     pred.distribution$predictions[, "quantile= 0.95"])
   
 ###################### quantregForest: should be the same as the ranger quantreg =T
+
 qrf <- quantregForest(x=x_p[training,],
                         y = y_denl[training], nodesize=10, ntrees=1000)
 QRF_U90 <- predict(qrf, x_p[test,], what = 0.95)
@@ -85,11 +81,13 @@ QRF_L90 <- predict(qrf, x_p[test,], what = 0.05)
 #  plot( conditionalQuantiles,pred.distribution$predictions[, "quantile= 0.95"])
   #hist(pred.distribution$predictions[5,])
  
-#################################  
+#################################  use Lasso to aggregate random forest trees, 
 RF <- ranger(x = x_p[training,],
-                      y = y_denl[training], mtry = NULL, num.trees = 1000, min.node.size = 10)
- 
+             y = y_denl[training], mtry = NULL, num.trees = 1000, min.node.size = 10)
+
 allp = predict(RF,x_p[training,],type = "response", predict.all = T)%>%predictions #get all the tree predictions, instead of the mean
+rpre= predict(RF,x_p[test,], predict.all=T)%>%predictions # get all the tree predictions
+
 #dim(allp2)  
   #allp = predict(RF,x_p[training,],type = "terminalNodes")$predictions
  # length(unique(allp[,39]))
@@ -98,25 +96,25 @@ allp = predict(RF,x_p[training,],type = "response", predict.all = T)%>%predictio
   #plot(  apply(allp, 1, quantile, 0.95),pred.distribution$predictions[, "quantile= 0.95"], col = "red")
   #abline(a=0,b = 1)
    
-cvfit <- glmnet::cv.glmnet(allp,y_denl[training], 
+cvfit = glmnet::cv.glmnet(allp,y_denl[training], 
                               type.measure = "mse", standardize = TRUE, alpha = 1, 
                                lower.limit = 0, nfolds = 10)  
-    # aggregate using a regularization, here lasso, you can also do elastic net, training alpha or specify alpha between 0 and 1
+
+# aggregate using a regularization, here lasso, you can also do elastic net, training alpha or specify alpha between 0 and 1
 print(sum(coef(cvfit)[-1]!= 0))
-    # we can also plot it, using a tool from APMtools
+# we can also plot it, using a tool from APMtools
 Ls= Lassoselected(cvfit)
 Ls_num= as.vector(sapply(Ls, function(x) as.numeric(substr(x, start =2, stop = nchar(x)))))
-n <- length(test)
-rpre= predict(RF,x_p[test,], predict.all=T)%>%predictions # get all the tree predictions
+n = length(test)
 
-   
-##########test: all predictions of ranger vs. quanreg. 
+########## test: all predictions of ranger vs. quanreg. 
 #########somehow i get different quantiles, using the same method. 
 #  predict.all =T 
 #  get mean for each tree, the quantiles use a random observation y for each node and tree, if a node has many obs. for one tree, it doesnt matter because next tree may select a different y, in this sense it is a bit like bootstrapping.
 #  they are closely correlated, but not equal. ###########################################
 ### try the original quantile rf
-### reduced RF used LASSO selected variables
+### reduced RF used LASSO selected trees.
+
 reduced_rf = rpre[,Ls_num]
 y_denl_train = y_denl[training]
 
@@ -137,12 +135,13 @@ for (tree in 1:num.trees){
       node.values[, tree] <-  random.node.values[terminal.nodes[, tree], tree]
     }  
     rf_u90 <-  apply(node.values, 1, quantile, 0.95, na.rm=TRUE)
-
+    
     rrf2_u90 = apply(node.values[,Ls_num], 1, quantile, 0.95,na.rm=TRUE)
     rrf2_l90 = apply(node.values[,Ls_num], 1, quantile, 0.05,na.rm=TRUE)
     rrf2_mean = apply(node.values[,Ls_num], 1, mean,na.rm=TRUE)
     rrf2_sd = apply(node.values[,Ls_num], 1, sd ,na.rm=TRUE)
-    # reduced variables, compare
+   
+     # aggregating trees using lasso, compare with original random forest, obtained better results
     rrf_u90 = apply(reduced_rf, 1, quantile, 0.95)
     rrf_l90 = apply(reduced_rf, 1, quantile, 0.05)
     
@@ -158,7 +157,7 @@ for (tree in 1:num.trees){
     #########################################################################
    
     apply(rpre, 1, quantile, 0.95)       
-    pred.distribution$predictions[, "quantile= 0.05"],
+    pred.distribution$predictions[, "quantile= 0.05"]
     cor(apply(rpre, 1, quantile, 0.95), pred.distribution$predictions[, "quantile= 0.95"])
     cor(rf_u90, pred.distribution$predictions[, "quantile= 0.95"])
     cor(rf_u90, apply(rpre, 1, quantile, 0.95))
@@ -235,6 +234,12 @@ summary(  cbind(distcrps,rrfcrps,regcrps, rrf2crps))
 # INLA
  ################
    source("~/Documents/GitHub/uncertainty/MLmodeling//INLA/INLA_util.R") 
+  
+  covnames0 <- c("nightlight_450", "population_1000", "population_3000",
+                 "road_class_1_5000", "road_class_2_100", "road_class_3_300", "trop_mean_filt",
+                 "road_class_3_3000", "road_class_1_100", "road_class_3_100"
+                 , "road_class_3_5000", "road_class_1_300", "road_class_1_500",
+                 "road_class_2_1000", "nightlight_3150", "road_class_2_300", "road_class_3_1000", "temperature_2m_7")
   
   
   d <- df[, c("mean_value", "Longitude", "Latitude", covnames0)]
