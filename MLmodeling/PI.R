@@ -178,15 +178,7 @@ for (tree in 1:num.trees){
   mu_ = pre[["mu"]] 
   sigma_ =pre[["sigma"]]
   dist.q90 = cbind(mu_-1.64*sigma_, mu_+1.64*sigma_)
-  
-  ### xgb
-  xgb = xgboost(data = as.matrix(x_p[training,]),
-         label = y_denl[training],  max_depth =6, gamma=5, eta =0.007, nrounds =1000, lambda = 2, alpha = 0, subsample = 0.7 )
-  
-  xgbpre = predict(xgb, as.matrix(x_p[test,]))
-  error_matrix(y_denl_test, xgbpre)
- 
- 
+
 #compare
   rf_90 = t.quant90
   df1 = cbind(data.frame(rf_90), data.frame(dist.q90), rrf_l90,rrf_u90,QRF_L90,QRF_U90,id = 1:nrow(data.frame(rf_90)),y_denl_test )
@@ -198,7 +190,7 @@ for (tree in 1:num.trees){
   ggplot(df1)+aes(x = id, y = value, colour = variable)+geom_line()+
     geom_point(aes(y=test), colour= "black")+
   scale_color_brewer(palette="Spectral")+labs(x = "test points", y = "NO2", colour = "prediction intervals")
-   #l
+   #
   ggsave("dist_vs_qrf_notsq.png")
  
 plot(rf_90[,1]  ,ylim = c(min(y_denl_test)-1,max(y_denl_test)+1),  typ = "l")
@@ -215,6 +207,8 @@ plot(rf_90[,1]  ,ylim = c(min(y_denl_test)-1,max(y_denl_test)+1),  typ = "l")
   #qqline(sqrt(df$mean_value), col = "steelblue", lwd = 2)
   #shapiro.test(sqrt(df$mean_value))
   shapiro.test(pred.distribution$predictions[5,])
+  
+  # CRPS evaluration prob. forecast with scoring ranks: https://arxiv.org/pdf/1709.04743.pdf
   distcrps = crps(y = y_denl_test, family = "norm", mean = mu_, sd = sigma_) 
   rrfcrps = crps(y = y_denl_test, family = "norm", mean = rrf_mean, sd = rrf_sd) 
   rrf2crps = crps(y = y_denl_test, family = "norm", mean = rrf2_mean, sd = rrf2_sd) 
@@ -229,7 +223,14 @@ summary(  cbind(distcrps,rrfcrps,regcrps, rrf2crps))
   #val <- APMtools::error_matrix(validation =y_denl_test, prediction = predictions(pred))
   #val
 
- 
+  ### xgb
+  xgb = xgboost(data = as.matrix(x_p[training,]),
+                label = y_denl[training],  max_depth =6, gamma=5, eta =0.007, nrounds =1000, lambda = 2, alpha = 0, subsample = 0.7 )
+  
+  xgbpre = predict(xgb, as.matrix(x_p[test,]))
+  error_matrix(y_denl_test, xgbpre)
+  
+  
  ##################### 
 # INLA
  ################
