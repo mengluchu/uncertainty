@@ -255,8 +255,10 @@ fnMLPredictionsAll = function(d, y_var="y", training, test, prestring =  "road|n
 #' @param d Data frame with data for estimation that contains coordinates (coox, cooy), response variable (y) and covariates
 #' If \code{covnames} includes an intercept, \code{d} needs to have column of 1s for the intercept
 #' @param covnames Vector with the names of the intercept and covariates to be included in the formula
+#' @param spatialsample if doing spatial sampling for validation, i.e. sample less in dense areas but more in sparse areas so that the points sampled are even in space. This may however not be needed in air pollution mapping, where the ground stations are dense in places where it should be. 
+
 #' @return Vector with the cross-validation results
-INLA_crossvali =  function(n, d, covnames){
+INLA_crossvali =  function(n, d, covnames, spatialsample = F){
   print(n)
   # Split data
   smp_size <- floor(0.2 * nrow(d)) 
@@ -264,7 +266,7 @@ INLA_crossvali =  function(n, d, covnames){
   if(typecrossvali == "crossvalinotspatial"){
     test <- sample(seq_len(nrow(d)), size = smp_size)
   }
-  if(typecrossvali == "crossvalispatial"){
+  if(spatialsample){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
     # We use locations of a spatially representative sample of the prediction surface
     # To obtain a valid data set, X% of the observations are sampled without replacement where
@@ -303,10 +305,11 @@ INLA_crossvali =  function(n, d, covnames){
 #' @param n Number of iteration 
 #' @param d Data frame with data for estimation that contains coordinates (coox, cooy), response variable (y) and covariates
 #' @param dp Data frame with data for prediction that contains coordinates (coox, cooy), and covariates
+#' @param spatialsample if doing spatial sampling for validation, i.e. sample less in dense areas but more in sparse areas so that the points sampled are even in space. This may however not be needed in air pollution mapping, where the ground stations are dense in places where it should be. 
 #' If \code{covnames} includes an intercept, \code{d} needs to have column of 1s for the intercept
 #' @param covnames Vector with the names of the intercept and covariates to be included in the formula
 #' @return Vector with the cross-validation results
-INLA_stack_crossvali =  function(n, d, formula, covnames,typecrossvali = "crossvalispatial"){
+INLA_stack_crossvali =  function(n, d, formula, covnames, spatialsample = F){
   
   print(n)
   # Split data
@@ -317,7 +320,7 @@ INLA_stack_crossvali =  function(n, d, formula, covnames,typecrossvali = "crossv
   if(typecrossvali == "crossvalinotspatial"){
     test <- sample(seq_len(nrow(d)), size = smp_size)
   }
-  if(typecrossvali == "crossvalispatial"){
+  if(spatialsample){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
     # We use locations of a spatially representative sample of the prediction surface
     # To obtain a valid data set, X% of the observations are sampled without replacement where

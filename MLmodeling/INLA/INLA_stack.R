@@ -32,9 +32,9 @@ covnames <- c("lasso", "rf", "xgb")
 formula <- as.formula("y ~ 0 + f(lasso, model = 'clinear', range = c(0, 1), initial = 1/3) +
                          f(rf, model = 'clinear', range = c(0, 1), initial = 1/3) +
                          f(xgb, model = 'clinear', range = c(0, 1), initial = 1/3) + f(s, model = spde)") 
-
+ 
 # Cross-validation
-VLA <- lapply(1:20, FUN = INLA_crossvali, d = d, formula = formula, covnames = covnames)
+VLA <- lapply(1:20, FUN = INLA_stack_crossvali, d = d, formula = formula, covnames = covnames)
 (VLA <- data.frame(LA = rowMeans(data.frame(VLA))))
 
 # stacked model without INLA
