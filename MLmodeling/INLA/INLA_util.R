@@ -24,8 +24,6 @@ fnConstructMesh <- function(coo){
   return(mesh)
 }
 
-
-
 #' Fits a spatial model using INLA and SPDE
 #' 
 #' It creates a mesh using coordinates d$coox and d$cooy

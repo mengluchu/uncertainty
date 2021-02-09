@@ -24,26 +24,26 @@ d$cooy <- d$Latitude
 d$b0 <- 1 # intercept
 d$real <- d$y
 
-# Data for prediction
-dp <- d
+# Cross-validation
+VLA <- lapply(1:20, FUN = INLA_crossvali, d = d, covnames = covnames)
+(VLA <- data.frame(LA = rowMeans(data.frame(VLA))))
 
+#############################################################################
+### INLA example, using all data, i.e. training the same as testing ####
+#############################################################################
+dp <- d
 # Call inla()
 lres <- fnFitModelINLA(d, dp = NULL, covnames, TFPOSTERIORSAMPLES = FALSE, formulanew = NULL)
 res <- lres[[1]]
 stk.full <- lres[[2]]
 mesh <- lres[[3]]
-
 # Get predictions
 dres <- fnGetPredictions(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES = -1, cutoff_exceedanceprob = 30)
-
 # Goodness of fit
 APMtools::error_matrix(validation = dres$real, prediction = dres$pred_mean)
 cor(dres$real, dres$pred_mean)
 mean(dres$pred_ll <= dres$real &  dres$real <= dres$pred_ul)
 
-# Cross-validation
-VLA <- lapply(1:20, FUN = INLA_crossvali, d = d, covnames = covnames)
-(VLA <- data.frame(LA = rowMeans(data.frame(VLA))))
 
  
 # RMSE          7.5002554
