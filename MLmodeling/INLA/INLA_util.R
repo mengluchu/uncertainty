@@ -263,7 +263,8 @@ INLA_crossvali =  function(n, d, covnames, spatialsample = F){
   # Split data
   smp_size <- floor(0.2 * nrow(d)) 
   set.seed(n)
-  if(typecrossvali == "crossvalinotspatial"){
+  
+  if(!(spatialsample)){
     test <- sample(seq_len(nrow(d)), size = smp_size)
   }
   if(spatialsample){
@@ -317,7 +318,7 @@ INLA_stack_crossvali =  function(n, d, formula, covnames, spatialsample = F){
   set.seed(n)
   
   
-  if(typecrossvali == "crossvalinotspatial"){
+  if(!(spatialsample)){
     test <- sample(seq_len(nrow(d)), size = smp_size)
   }
   if(spatialsample){
