@@ -1,7 +1,11 @@
-#install.packages("INLA", repos=c(getOption("repos"), INLA="https://inla.r-inla-download.org/R/stable"), dep=TRUE)
-library(INLA)
 #devtools::install_github("mengluchu/APMtools") 
+library(INLA)
 library(APMtools)
+library(dplyr)
+library(h2o)
+library(dismo)
+#h2o.shutdown(prompt = F)
+h2o.init(nthreads=-1)
 
 #' Creates triangulated mesh to fit a spatial model using INLA and SPDE
 #' 
@@ -29,21 +33,21 @@ fnConstructMesh <- function(coo){
 #' Fits a spatial model using INLA and SPDE
 #' 
 #' It creates a mesh using coordinates d$coox and d$cooy
-#' Formula is intercept + covnames + spatial effect unless \code{formulanew} is specified
+#' Formula is passed in argument formula
 #' It creates stk.full with data for estimation or data for estimation and prediction (if TFPOSTERIORSAMPLES is TRUE)
 #' Calls \code{inla()} and returns list with result and stk.full
 #' 
 #' @param d Data frame with data for estimation that contains coordinates (coox, cooy), response variable (y) and covariates
+#' @param formula Formula for the model
 #' If \code{covnames} includes an intercept, \code{d} needs to have column of 1s for the intercept
 #' @param dp Data frame with data for prediction that contains coordinates (coox, cooy), and covariates
 #' If \code{covnames} includes an intercept, \code{dp} needs to have column of 1s for the intercept
 #' If dp is NULL, dp will not used to construct stk.full
-#' @param covnames Vector with the names of the intercept and covariates to be included in the formula
+#' @param covnames Vector with the names of the intercept and covariates that are in the formula
 #' @param TFPOSTERIORSAMPLES Boolean variable to call \code{inla()} with config = TFPOSTERIORSAMPLES.
 #' If it config = TRUE we will get a res object with which we could call \code{inla.posterior.samples()}
-#' @param formulanew A string with the formula. If formulanew is NULL, the formula will be constructed as intercept + covnames + spatial effect
 #' @return list with the results of the fitted model, stk.full and mesh
-fnFitModelINLA <- function(d, dp, covnames, TFPOSTERIORSAMPLES, formulanew = NULL){
+fnFitModelINLA <- function(d, dp, formula, covnames, TFPOSTERIORSAMPLES){
   # Coordinates locations
   coo <- cbind(d$coox, d$cooy)
   # Mesh
@@ -58,26 +62,17 @@ fnFitModelINLA <- function(d, dp, covnames, TFPOSTERIORSAMPLES, formulanew = NUL
   # Stack with data for estimation. Effects include intercept and covariates
   stk.e <- inla.stack(tag = "est", data = list(y = d$y), A = list(1, A), effects = list(d[, covnames, drop = FALSE], s = indexs))
   if(is.null(dp)){
-    stk.full <- inla.stack(stk.e)
+  stk.full <- inla.stack(stk.e)
   }else{
-    # Prediction coordinate locations and projection matrix
-    coop <- cbind(dp$coox, dp$cooy)
-    Ap <- inla.spde.make.A(mesh = mesh, loc = coop)
-    # stack  
-    stk.p <- inla.stack(tag = "pred", data = list(y = NA), A = list(1, Ap), effects = list(dp[, covnames, drop = FALSE], s = indexs))
-    stk.full <- inla.stack(stk.e, stk.p)
+  # Prediction coordinate locations and projection matrix
+  coop <- cbind(dp$coox, dp$cooy)
+  Ap <- inla.spde.make.A(mesh = mesh, loc = coop)
+  # stack  
+  stk.p <- inla.stack(tag = "pred", data = list(y = NA), A = list(1, Ap), effects = list(dp[, covnames, drop = FALSE], s = indexs))
+  stk.full <- inla.stack(stk.e, stk.p)
   }
   
-  # Formula
-  # covnames includes the intercept and the covariates
-  if(is.null(formulanew)){
-    formula <- as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
-  }
-  else{
-    formula <- formulanew
-  }
-  
-  # Call inla(). Add config = TRUE if we want to call inla.posterior.sample()
+  # Formula that is specified in the arguments
   st1 <- Sys.time()
   res <- inla(formula, data = inla.stack.data(stk.full), control.predictor = list(compute = TRUE, A = inla.stack.A(stk.full)),
               control.compute = list(config = TFPOSTERIORSAMPLES))
@@ -85,6 +80,8 @@ fnFitModelINLA <- function(d, dp, covnames, TFPOSTERIORSAMPLES, formulanew = NUL
   print(st2-st1)
   return(list(res, stk.full, mesh))
 }
+
+
 
 
 #' Computes the linear predictor from one of the samples of an object obtained with \code{inla.posterior.samples()
@@ -120,7 +117,6 @@ fnPredictFromPosteriorSample <- function(psamples, ite, res, mesh, dp, covnames)
   return(predictions)
 }
 
-
 #' Get predictions from a result object obtained by fitting as spatial model using INLA and SPDE
 #' 
 #' @param res result object from an \code{inla()} call
@@ -148,7 +144,7 @@ fnGetPredictions <- function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLE
   if(NUMPOSTSAMPLES == -1){
     index <- inla.stack.index(stk.full, tag = "est")$data
     d$excprob <- sapply(res$marginals.fitted.values[index],
-                        FUN = function(marg){1-inla.pmarginal(q = cutoff_exceedanceprob, marginal = marg)})
+                         FUN = function(marg){1-inla.pmarginal(q = cutoff_exceedanceprob, marginal = marg)})
     d$pred_mean <- res$summary.fitted.values[index, "mean"]
     d$pred_ll <- res$summary.fitted.values[index, "0.025quant"]
     d$pred_ul <- res$summary.fitted.values[index, "0.975quant"]
@@ -188,7 +184,6 @@ fnGetPredictions <- function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLE
   return(dres) 
 }
 
-
 #' get h2o cv results from a h2o model and return a df
 #' @param h2omodel h2omodel
 #' 
@@ -206,7 +201,7 @@ get_h2o_pred = function(h2omodel)
 #' @param training the index for training 
 
 fnMLPredictionsCV = function(d, y_var= "y", training,  prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi" ){
-  
+ 
   x_var = d%>%dplyr::select(matches(prestring))%>%names() 
   td = d%>%dplyr::select(c(x_var, y_var))
   td = td[training, ]
@@ -215,7 +210,7 @@ fnMLPredictionsCV = function(d, y_var= "y", training,  prestring =  "road|nightl
   rf = h2o.randomForest(y = y_var , x= x_var, training_frame = merged_hex, ntrees =1000,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
   xgb = h2o.xgboost(y = y_var , x= x_var, training_frame = merged_hex, nfolds =10, ntrees =300, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, keep_cross_validation_predictions = T, seed =1 )
   las = h2o.glm(y = y_var , x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
-  
+
   rf  =get_h2o_pred(rf)
   xgb  =get_h2o_pred(xgb)
   lasso  =get_h2o_pred(las)  
@@ -230,13 +225,13 @@ fnMLPredictionsCV = function(d, y_var= "y", training,  prestring =  "road|nightl
 #' @param training the index for training 
 #' @param test the index for test
 fnMLPredictionsAll = function(d, y_var="y", training, test, prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi" ){
-  
+
   x_var = d%>%dplyr::select(matches(prestring))%>%names() 
   td = d%>%dplyr::select(c(x_var, y_var))
   merged_hex = as.h2o(td[training, ])# train on training set
   
   new_hex = as.h2o(td[test, ]) # predict to test
-  
+
   rf_all = h2o.randomForest(y = y_var, x= x_var, training_frame = merged_hex, ntrees =1000, seed =1 )
   rf  = as.data.frame(h2o.predict(object = rf_all, newdata = new_hex))$predict 
   xgb_all = h2o.xgboost(y = y_var, x= x_var, training_frame = merged_hex, ntrees =300, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, seed =1 )
@@ -245,57 +240,10 @@ fnMLPredictionsAll = function(d, y_var="y", training, test, prestring =  "road|n
   lasso  = as.data.frame(h2o.predict(object = las_all, newdata = new_hex))$predict 
   h2o.removeAll()
   cbind(rf, xgb, lasso)
-  
-}
+ 
+  }
 
 
-#' Calculates cross-validation measures obtained by fitting a spatial model using INLA and SPDE
-#'
-#' @param n Number of iteration 
-#' @param d Data frame with data for estimation that contains coordinates (coox, cooy), response variable (y) and covariates
-#' If \code{covnames} includes an intercept, \code{d} needs to have column of 1s for the intercept
-#' @param covnames Vector with the names of the intercept and covariates to be included in the formula
-#' @return Vector with the cross-validation results
-INLA_crossvali =  function(n, d, covnames){
-  print(n)
-  # Split data
-  smp_size <- floor(0.2 * nrow(d)) 
-  set.seed(n)
-  if(typecrossvali == "crossvalinotspatial"){
-    test <- sample(seq_len(nrow(d)), size = smp_size)
-  }
-  if(typecrossvali == "crossvalispatial"){
-    # The validation data needs to spatially represent the whole region where the prevalence is predicted
-    # We use locations of a spatially representative sample of the prediction surface
-    # To obtain a valid data set, X% of the observations are sampled without replacement where
-    # each observation has a probability of selection proportional to the area of the Voronoi polygon
-    # surrounding its location, that is, the area closest to the location relative to the surrounding points
-    p <- matrix(c(d$coox, d$cooy), ncol = 2)
-    v <- dismo::voronoi(p) # extent?
-    prob_selection <- area(v)/sum(area(v))
-    test <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
-  }
-  
-  training <- seq_len(nrow(d))[-test] 
-  # Fit model
-  # Data for prediction
-  dp <- d
-  
-  dtraining <- d[training, ]
-  dptest <- dp[test, ]
-  # Fit model
-  lres <- fnFitModelINLA(dtraining, dptest, covnames, TFPOSTERIORSAMPLES = FALSE, formulanew = NULL)
-  # Get predictions
-  dptest <- fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
-  # Goodness of fit
-  val <- APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
-  val <- c(val, cor = cor(dptest$real, dptest$pred_mean))
-  
-  (val <- c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
-            covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
-            covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50)))
-  return(val)
-} 
 
 #' Calculates cross-validation measures obtained by fitting a spatial model using INLA and SPDE
 #' It uses d and dp because datasets for estimation and prediction have different covariates (predictions by cross-validation and using all data)
@@ -306,13 +254,13 @@ INLA_crossvali =  function(n, d, covnames){
 #' If \code{covnames} includes an intercept, \code{d} needs to have column of 1s for the intercept
 #' @param covnames Vector with the names of the intercept and covariates to be included in the formula
 #' @return Vector with the cross-validation results
-INLA_stack_crossvali =  function(n, d, formula, covnames,typecrossvali = "crossvalispatial"){
-  
+INLA_crossvali =  function(n, d, formula, covnames,typecrossvali = "crossvalispatial"){
+ 
   print(n)
   # Split data
   smp_size <- floor(0.2 * nrow(d)) 
   set.seed(n)
-  
+ 
   
   if(typecrossvali == "crossvalinotspatial"){
     test <- sample(seq_len(nrow(d)), size = smp_size)
@@ -338,11 +286,11 @@ INLA_stack_crossvali =  function(n, d, formula, covnames,typecrossvali = "crossv
   # INI CODE MENG
   # Add to d[, training] 3 variables with names lasso, rf, xgb that are predictions at locations coox and cooy calculated using cross-validation with the dataset d[, training]
   dtraining <- cbind(dtraining, fnMLPredictionsCV(d=d, training = training))
-  
+ 
   # Add to dp[test, ] 3 variables with names lasso, rf, xgb that are predictions at locations coox and cooy calculated using all data in d[, training]
   
   dptest <- cbind(dptest,  fnMLPredictionsAll(d=d, training = training, test = test))
-  
+   
   # END CODE MENG
   
   
@@ -350,18 +298,18 @@ INLA_stack_crossvali =  function(n, d, formula, covnames,typecrossvali = "crossv
   lres <- fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE)
   # Get predictions
   dptest <- fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
-  
+
   # Goodness of fit
   val <- APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
   val <- c(val, cor = cor(dptest$real, dptest$pred_mean))
   print(val)
   (val <- c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
-            covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
-            covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50)))
+                 covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
+                 covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50)))
   
   return(val)
 } 
-
+ 
 ############stack without inla ######################################
 #' Stack with h2o, not using inla, return error metrics. 
 #'  @param  d: dataframe with predictors and response
@@ -373,13 +321,13 @@ ensemble= function(d, n, y_var= "y", prestring =  "road|nightlight|population|te
   training <- sample(seq_len(nrow(d)), size = smp_size)
   test <- seq_len(nrow(d))[-training] 
   # Fit model
-  
+ 
   dptest <- d[test, ]
   ytest = dptest[,y_var]
   x_var = d%>%dplyr::select(matches(prestring))%>%names() 
   td = d%>%dplyr::select(c(x_var, y_var))
   td = td[training, ]
-  
+ 
   merged_hex = as.h2o(td)
   dptest= as.h2o(dptest)
   rf = h2o.randomForest(y = y_var , x= x_var, training_frame = merged_hex, ntrees =1000,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
@@ -396,3 +344,65 @@ ensemble= function(d, n, y_var= "y", prestring =  "road|nightlight|population|te
   h2o.removeAll()
   return(val)
 }
+############## run #
+resolution = 100 
+
+d <- read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+
+if (resolution ==100)
+{
+  d = d%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
+} 
+# Data for estimation. Create variables y with the response, coox and cooy with the coordinates, and b0 with the intercept (vector of 1s)
+d$y <- d$mean_value # response
+d$coox <- d$Longitude
+d$cooy <- d$Latitude
+d$b0 <- 1 # intercept
+d$real <- d$y
+dp <- d
+ 
+ 
+# MODEL 2
+# Model stacked generalization. I need predictions with the cross-validated test to fit the model, and predictions with the whole data to predict.
+covnames <- c("lasso", "rf", "xgb")
+
+formula <- as.formula("y ~ 0 + f(lasso, model = 'clinear', range = c(0, 1), initial = 1/3) +
+                         f(rf, model = 'clinear', range = c(0, 1), initial = 1/3) +
+                         f(xgb, model = 'clinear', range = c(0, 1), initial = 1/3) + f(s, model = spde)") 
+
+# Cross-validation
+VLA <- lapply(1:20, FUN = INLA_crossvali, d = d, formula = formula, covnames = covnames)
+(VLA <- data.frame(LA = rowMeans(data.frame(VLA))))
+
+# with stacked-learners using INLA
+#RMSE          7.1359408
+#RRMSE         0.2984085
+#IQR           7.1528871
+#rIQR          0.3269740
+#MAE           5.2621438
+#rMAE          0.2200768
+#rsq           0.6902379
+#explained_var 0.6910040
+#cor           0.8343859
+#covprob95     0.3582474
+#covprob90     0.3144330
+#covprob50     0.1484536
+
+'almost  the same if i use 3000 or 300 xgboos trees! lower learning rate + less trees = similar spatial pattern but slightly less RMSE. Maybe just use 300 trees.  
+LA
+RMSE          7.1859116
+RRMSE         0.3005263
+IQR           7.3031196
+rIQR          0.3335296
+MAE           5.3181910
+rMAE          0.2224en85
+rsq           0.6859345
+explained_var 0.6869203
+cor           0.8322331
+covprob95     0.3623711
+covprob90     0.3211340
+covprob50     0.1453608'
+
+ensembleh2o <- lapply(1:2, FUN =ensemble, d = d )
+save(ensembleh2o, file = "ensembleh2o.rda")
+save(VLA, file = "VLA.rda")

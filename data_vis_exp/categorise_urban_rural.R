@@ -9,3 +9,5 @@ for(i in 1:nrow(mergedall)){
     j = j+1
 }
 j
+write.csv(mergedall, "~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_uc.csv")
+head(mergedall)
