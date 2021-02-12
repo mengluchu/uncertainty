@@ -53,3 +53,45 @@ locations_sf = st_as_sf(DENL_2017, coords = c("Longitude","Latitude"), crs=4642)
 mapview(locations_sf)
 
 #write.csv(DENL_2017,"/Users/menglu/Documents/GitHub/DENL17_hr.csv")
+library(raster)
+library(dplyr)
+library(ranger)
+library(APMtools)
+data(global_annual) 
+mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+names(mergedall)
+gr = raster("~/Downloads/s5p2019_handpoly.tif")
+gr1 = raster("~/Downloads/s5p2019_handpoly_aug_dec.tif")
+g = list.files("/Volumes/Meng_Mac/S5p/", full.names = T) 
+
+ 
+
+for ( i in g)
+{
+  ras = raster(i)
+  mergedall = mergeraster2file(mergedall,ras, c("Longitude", "Latitude"), paste0("S5p_", substr(i, 29, 30)))
+}
+mergedall = mergeraster2file(mergedall,gr, c("Longitude", "Latitude"), "S5p_b_Aug")
+mergedall = mergeraster2file(mergedall,gr1, c("Longitude", "Latitude"), "S5p_a_Aug")
+
+
+y_var = "mean_value"
+prestring =  "S5p|road|nightlight|population|trop|indu|temp|wind|elev|radi|urbantype$"
+varstring = paste(prestring,y_var,sep="|")
+#
+merged = mergedall%>%dplyr::select(matches(varstring))%>%na.omit()
+names(merged)
+set.seed(1)
+r = ranger(mean_value~., merged, importance = "permutation")
+r
+sort(r$variable.importance, decreasing = T)
+getwd()
+
+ 
+write.csv(merged, "~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_S5p_uc.csv")
+ cor(merged)
+ plot(unlist(apply(merged,2,median)), typ = "l")
+
+
+
+
