@@ -74,7 +74,6 @@ for ( i in g)
 mergedall = mergeraster2file(mergedall,gr, c("Longitude", "Latitude"), "S5p_b_Aug")
 mergedall = mergeraster2file(mergedall,gr1, c("Longitude", "Latitude"), "S5p_a_Aug")
 
-
 y_var = "mean_value"
 prestring =  "S5p|road|nightlight|population|trop|indu|temp|wind|elev|radi|urbantype$"
 varstring = paste(prestring,y_var,sep="|")
@@ -90,8 +89,7 @@ getwd()
  
 write.csv(merged, "~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_S5p_uc.csv")
  cor(merged)
- plot(unlist(apply(merged,2,median)), typ = "l")
-
+ 
 
 
 
