@@ -5,6 +5,11 @@ output:
     df_print: paged
 ---
  
+Questions:
+1. effects of normalising predictors
+2. effects of loss distributions
+3. improvement of using rf_lasso
+4. 
 ```{r global_options, include=FALSE}
 knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path=paste0('global_crossvali',"/"),
                       echo=F, warning=FALSE, message=FALSE, dev = "png", include = T)
@@ -193,7 +198,7 @@ stargazer(vimp)
 
 Bootstrapped cross-validation 
 ```{r xgb, eval=T}
-xgb_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial",coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+xgb_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial",coordi = c(mergedall$Longitude, mergedall$Latitude)) {
   smp_size = floor(0.2* nrow(df)) 
   set.seed(n)
   if(typecrossvali == "crossvalinotspatial"){
@@ -208,7 +213,7 @@ xgb_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial",coordi 
     p <- matrix(coordi, ncol = 2)
     v <- dismo::voronoi(p) # extent?
     prob_selection <- area(v)/sum(area(v))
-   test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
+   test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = T)
   }
   training = seq_len(nrow(df))[-test] 
   
@@ -222,7 +227,7 @@ V2
 ```
  
 ```{r, eval = T}
-rf_crossvali =  function(n,df, y_var, coordi = c(mergedall$Longitude, mergedall$Latitude), typecrossvali = "crossvalispatial") {
+rf_crossvali =  function(n,df, y_var, coordi = c(mergedall$Longitude, mergedall$Latitude), typecrossvali = "crossvalinotspatial") {
   smp_size <- floor(0.2 * nrow(df)) 
   set.seed(n)
   if(typecrossvali == "crossvalinotspatial"){
@@ -238,7 +243,7 @@ rf_crossvali =  function(n,df, y_var, coordi = c(mergedall$Longitude, mergedall$
     p <- matrix(coordi, ncol = 2)
     v <- dismo::voronoi(p) # extent?
     prob_selection <- area(v)/sum(area(v))
-    test<- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
+    test<- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = T)
   }
   training = seq_len(nrow(df))[-test] 
   rf_LUR(df, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
@@ -253,7 +258,7 @@ Vrf
 ```
 
 ```{r, eval=T}
-LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
   smp_size <- floor(0.2 * nrow(df)) 
   set.seed(n)
   if(typecrossvali == "crossvalinotspatial"){
@@ -270,19 +275,20 @@ LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial", coordi 
     
     prob_selection <- area(v)/sum(area(v))
     hist(prob_selection, n=500)
-    test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
+    test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = T)
+    tr = p[training,] %>%  sf::st_multipoint() 
+    te = p[test,] %>% sf::st_multipoint()
+  
+  #p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
+  #plot(p)
   }
  
   #plot(v)
   training = seq_len(nrow(df))[-test] 
   
-  tr = p[training,] %>%  
-  sf::st_multipoint() 
-    
-  te = p[test,] %>% 
-  st_multipoint()
+ 
   
-  p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
+  #p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
   #plot(p)
   Lasso(df, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
   
@@ -293,9 +299,9 @@ LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial", coordi 
   VLA = data.frame(LA = rowMeans(data.frame(VLA)))
   VLA
 ```
-
+quantiel RF to look at coverage probability, more detailed analysis see 'PI.R'
 ```{r}
-q_rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+q_rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
   smp_size <- floor(0.2* nrow(df)) 
   set.seed(n)
    if(typecrossvali == "crossvalinotspatial"){
@@ -315,13 +321,125 @@ q_rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalispatial", coord
 training = seq_len(nrow(df))[-test] 
   q_rf_LUR(df, numtrees =  1000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =varstring)} 
 qrf = lapply(1:nboot, df = merged, y_var = y_var, q_rf_crossvali )
- qrf = data.frame(LA = rowMeans(data.frame(qrf)))
+ qrf = data.frame(QRF = rowMeans(data.frame(qrf)))
  qrf
 ```
+ 
+```{r}
+rf_la_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+  smp_size <- floor(0.2* nrow(df)) 
+  set.seed(n)
+   if(typecrossvali == "crossvalinotspatial"){
+    test <- sample(seq_len(nrow(df)), size = smp_size)
+  }
+  if(typecrossvali == "crossvalispatial"){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+    p <- matrix(coordi, ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    prob_selection <- area(v)/sum(area(v))
+    test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
+  }
+training = seq_len(nrow(df))[-test] 
+rf_Lasso_LUR(df, numtrees =  1000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =varstring)
+} 
+rfla= lapply(1:nboot, df = merged, y_var = y_var,rf_la_crossvali )
+rfla = data.frame(RFLA = rowMeans(data.frame(rfla)))
+rfla
+```
 
-```{r, eval=FALSE}
-df = data.frame(cbind(VLA,Vrf, V2))
+```{r, eval=F}
+df = data.frame(Lasso = VLA,RF = Vrf, XGB = V2 , RF_Lasso = rfla)
 stargazer(df,summary = F, digits = 2)
+```
+
+Loss distribution is gamma 
+```{r}
+n = 1 
+df = merged 
+xgbgamma_cv = function(n,df, y_var){
+h2o.init()
+ 
+set.seed(n)
+ 
+smp_size <- floor(0.8 * nrow(df)) 
+  
+training <- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+  
+x_var = setdiff(names(merged), y_var) # predictor names
+ 
+train_xy = df[training,]
+test_xy = df[test,]
+y_train = train_xy[, y_var]
+y_test = test_xy[, y_var]
+x_train = train_xy%>%dplyr::select(x_var)
+x_test = test_xy%>%dplyr::select(x_var)
+
+train_hex = as.h2o(train_xy)
+test_hex = as.h2o(test_xy)
+  
+
+# model and predict on all the data
+
+
+xgb  = h2o.xgboost(y = y_var, x= x_var, training_frame = train_hex ,ntrees =1000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, seed =1, distribution = "gamma" )
+
+xgb_pre = as.data.frame(h2o.predict(object = xgb, newdata = test_hex))$predict 
+h2o.removeAll()
+APMtools::error_matrix (validation = y_test, prediction = xgb_pre)
+}
+
+rg = lapply(1:nboot, df = merged, y_var = y_var, xgbgamma_cv  )
+rg = data.frame(XGB_GAMMA = rowMeans(data.frame(rg)))
+rg#gamma
+```
+
+```{r}
+rfgamma_cv = function(n,df, y_var){
+h2o.init()
+ 
+set.seed(n)
+ 
+smp_size <- floor(0.8 * nrow(df)) 
+  
+training <- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+  
+x_var = setdiff(names(merged), y_var) # predictor names
+ 
+train_xy = df[training,]
+test_xy = df[test,]
+y_train = train_xy[, y_var]
+y_test = test_xy[, y_var]
+x_train = train_xy%>%dplyr::select(x_var)
+x_test = test_xy%>%dplyr::select(x_var)
+
+train_hex = as.h2o(train_xy)
+test_hex = as.h2o(test_xy)
+  
+
+# model and predict on all the data
+
+rf = h2o.randomForest(y = y_var, x= x_var, training_frame = train_hex, ntrees =1000, seed =1, distribution = "gamma" )
+
+rf_pre = as.data.frame(h2o.predict(object = rf, newdata = test_hex))$predict 
+h2o.removeAll()
+APMtools::error_matrix (validation = y_test, prediction = rf_pre)
+}
+
+rg = lapply(1:nboot, df = merged, y_var = y_var, rfgamma_cv  )
+rg = data.frame(rf_GAMMA = rowMeans(data.frame(rg)))
+rg#gamma
+
+ 
+```
+```{r}
+rg
+
 ```
  
 #### Spatial cross-validation

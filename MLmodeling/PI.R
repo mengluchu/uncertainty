@@ -29,19 +29,19 @@ y_var = "mean_value"
 prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
 varstring = paste(prestring,y_var,sep="|")
  
-mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+mergedall = read.csv("https://raw.githubusernrcontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
 
 # do it for 100 m resolution, get rid of 25m resolution variables. 
 if (resolution ==100)
 {
   mergedall = mergedall%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
 } 
-df = mergedall 
- 
-#mergedall$mean_value = sqrt(mergedall$mean_value) # normalise for normal distribution 
+
+df = mergedall
+df$mean_value = sqrt(mergedall$mean_value) # normalise for normal distribution 
 
 # to be written into a function
- 
+num.trees = 1000  
 set.seed(1)
 smp_size <- floor(0.8 * nrow(df)) 
   
@@ -50,65 +50,71 @@ test = seq_len(nrow(df))[-training]
   
 y_denl = df[,y_var]
 y_denl_test = y_denl[test] 
+y_denl_train = y_denl[training]
+
 varall =df%>%dplyr::select(matches(varstring))
 x_p = df%>%dplyr::select(matches(varstring))%>%dplyr::select(-y_var)
-
+x_train =x_p[training,]
+x_test = x_p[test,]
 ############  
 ## 1. use ranger quanreg = T
 ######  
-quantRF <- ranger(x = x_p[training,],
-                    y = y_denl[training], mtry = NULL, num.trees = 1000,
+quantRF <- ranger(x = x_train,
+                    y = y_denl_train, mtry = NULL, num.trees = 1000,
                     quantreg = T, min.node.size = 10) 
   # compute predictions (mean) for each validation site
-pred <- predict(quantRF, data = x_p[test,], what = mean)
+pred <- predict(quantRF, data = x_test, what = mean)
   ## predict 0.01, 0.02,..., 0.99 quantiles for validation data
 pred.distribution <- predict(quantRF,
-                               data = x_p[test,], 
+                               data = x_test, 
                                type = "quantiles",
                                quantiles = seq(0.01, 0.99, by = 0.01)) # get quantiles
  
-sd_reg<- predict(quantRF,
-                   data = x_p[test,],type = "quantiles",what=sd)
-mean_reg <- predict(quantRF,
-                      data = x_p[test,], type = "quantiles",what=mean)
+sd_reg<- predict(quantRF, data = x_test,type = "quantiles",what=sd)
+mean_reg <- predict(quantRF, data = x_test, type = "quantiles",what=mean)
 t.quant90 <- cbind( 
     pred.distribution$predictions[, "quantile= 0.05"],
     pred.distribution$predictions[, "quantile= 0.95"])
   
 ###################### quantregForest: should be the same as the ranger quantreg =T
 
-qrf <- quantregForest(x=x_p[training,],
-                        y = y_denl[training], nodesize=10, ntrees=1000)
-QRF_U90 <- predict(qrf, x_p[test,], what = 0.95)
-QRF_L90 <- predict(qrf, x_p[test,], what = 0.05)
+qrf <- quantregForest(x=x_train,
+                        y = y_denl_train, nodesize=10, ntrees=1000)
+QRF_U90 <- predict(qrf, x_test, what = 0.95)
+QRF_L90 <- predict(qrf, x_test, what = 0.05)
 #  plot( conditionalQuantiles,pred.distribution$predictions[, "quantile= 0.95"])
   #hist(pred.distribution$predictions[5,])
  
 #################################  use Lasso to aggregate random forest trees, implemented in APMtools 
-RF <- ranger(x = x_p[training,],
-             y = y_denl[training], mtry = NULL, num.trees = 1000, min.node.size = 10)
+RF <- ranger(x = x_train,
+             y = y_denl_train, mtry = NULL, num.trees = 1000, min.node.size = 10)
 
-allp = predict(RF,x_p[training,],type = "response", predict.all = T)%>%predictions #get all the tree predictions, instead of the mean
-rpre= predict(RF,x_p[test,], predict.all=T)%>%predictions # get all the tree predictions
+allp = predict(RF,x_train,type = "response", predict.all = T)%>%predictions #get all the tree predictions, instead of the mean
+rpre= predict(RF,x_test, predict.all=T)%>%predictions # get all the tree predictions
 
-
-  #allp = predict(RF,x_p[training,],type = "terminalNodes")$predictions
- # length(unique(allp[,39]))
-  #plot(  apply(allp, 1, quantile, 0.05),pred.distribution$predictions[, "quantile= 0.05"])
-  #apply(allp, 1, quantile, 0.95)-pred.distribution$predictions[, "quantile= 0.95"]
-  #plot(  apply(allp, 1, quantile, 0.95),pred.distribution$predictions[, "quantile= 0.95"], col = "red")
-  #abline(a=0,b = 1)
-   
-cvfit = glmnet::cv.glmnet(allp,y_denl[training], 
+cvfit = glmnet::cv.glmnet(allp,y_denl_train, 
                               type.measure = "mse", standardize = TRUE, alpha = 1, 
                                lower.limit = 0, nfolds = 10)  
-
 # aggregate using a regularization, here lasso, you can also do elastic net, training alpha or specify alpha between 0 and 1
 print(sum(coef(cvfit)[-1]!= 0))
 # we can also plot it, using a tool from APMtools
 Ls= Lassoselected(cvfit)
 Ls_num= as.vector(sapply(Ls, function(x) as.numeric(substr(x, start =2, stop = nchar(x)))))
 n = length(test)
+# aggregating trees using lasso, compare with original random forest, obtained better results
+
+reduced_rf = rpre[,Ls_num] # 62 trees
+rrf_u90 = apply(reduced_rf, 1, quantile, 0.95)
+rrf_l90 = apply(reduced_rf, 1, quantile, 0.05)
+rrf_mean = apply(reduced_rf, 1,  mean)
+rrf_sd= apply(reduced_rf, 1,   sd)
+
+#allp = predict(RF,x_train,type = "terminalNodes")$predictions
+# length(unique(allp[,39]))
+#plot(  apply(allp, 1, quantile, 0.05),pred.distribution$predictions[, "quantile= 0.05"])
+#apply(allp, 1, quantile, 0.95)-pred.distribution$predictions[, "quantile= 0.95"]
+#plot(  apply(allp, 1, quantile, 0.95),pred.distribution$predictions[, "quantile= 0.95"], col = "red")
+#abline(a=0,b = 1)
 
 ########## test: all predictions of ranger vs. quanreg. 
 #########somehow i get different quantiles, using the same method. 
@@ -118,13 +124,7 @@ n = length(test)
 ### try the original quantile rf
 ### reduced RF used LASSO selected trees.
 
-reduced_rf = rpre[,Ls_num]
-y_denl_train = y_denl[training]
-
-num.trees = 1000
-y_denl_train = y_denl[training]
-    
-terminal.nodes <- predict(RF, x_p[training,], type = "terminalNodes")$predictions + 1
+terminal.nodes <- predict(RF, x_train, type = "terminalNodes")$predictions + 1
 random.node.values <- matrix(nrow = max(terminal.nodes), ncol = num.trees)
      
 ## Select one random obs per node and tree
@@ -132,7 +132,7 @@ for (tree in 1:num.trees){
       idx <- sample(1:n, n)
       random.node.values[terminal.nodes[idx, tree], tree] <- y_denl_train[idx]
     }
-    terminal.nodes <- predict(RF, x_p[test,], type = "terminalNodes")$predictions + 1
+    terminal.nodes <- predict(RF, x_test, type = "terminalNodes")$predictions + 1
     node.values <- 0 * terminal.nodes
     for (tree in 1:num.trees) {
       node.values[, tree] <-  random.node.values[terminal.nodes[, tree], tree]
@@ -143,24 +143,17 @@ for (tree in 1:num.trees){
     rrf2_l90 = apply(node.values[,Ls_num], 1, quantile, 0.05,na.rm=TRUE)
     rrf2_mean = apply(node.values[,Ls_num], 1, mean,na.rm=TRUE)
     rrf2_sd = apply(node.values[,Ls_num], 1, sd ,na.rm=TRUE)
-   
-     # aggregating trees using lasso, compare with original random forest, obtained better results
-    rrf_u90 = apply(reduced_rf, 1, quantile, 0.95)
-    rrf_l90 = apply(reduced_rf, 1, quantile, 0.05)
-    
-    rrf_mean = apply(reduced_rf, 1,  mean)
-    rrf_sd= apply(reduced_rf, 1,   sd)
-    
+ 
     plot(rrf2_l90, rrf_l90)
     
     error_matrix(y_denl_test,rrf2_mean)
     error_matrix(y_denl_test,rrf_mean)
-    error_matrix(y_denl_test,predict(RF,x_p[test,],type = "response")%>%predictions)
+    error_matrix(y_denl_test,predict(RF,x_test,type = "response")%>%predictions)
     
-    #########################################################################
+    ############################ compare #############################################
    
-    apply(rpre, 1, quantile, 0.95)       
-    pred.distribution$predictions[, "quantile= 0.05"]
+    #apply(rpre, 1, quantile, 0.95)       
+    #pred.distribution$predictions[, "quantile= 0.05"]
     cor(apply(rpre, 1, quantile, 0.95), pred.distribution$predictions[, "quantile= 0.95"])
     cor(rf_u90, pred.distribution$predictions[, "quantile= 0.95"])
     cor(rf_u90, apply(rpre, 1, quantile, 0.95))
@@ -175,8 +168,8 @@ for (tree in 1:num.trees){
   ################
       
  distf <- distforest(mean_value~.,  data = varall)
-  pre =  predict(distf, newdata = x_p[test,], type = "parameter")
-  w =  predict(distf, newdata = x_p[test,], type = "weights")
+  pre =  predict(distf, newdata = x_test, type = "parameter")
+  w =  predict(distf, newdata = x_test, type = "weights")
  
   mu_ = pre[["mu"]] 
   sigma_ =pre[["sigma"]]
@@ -184,17 +177,17 @@ for (tree in 1:num.trees){
 
 #compare
   rf_90 = t.quant90
-  df1 = cbind(data.frame(rf_90), data.frame(dist.q90), rrf_l90,rrf_u90,QRF_L90,QRF_U90,id = 1:nrow(data.frame(rf_90)),y_denl_test )
+  df1 = cbind(data.frame(rf_90), data.frame(dist.q90), rrf_l90,rrf_u90,rrf2_l90,rrf2_u90,id = 1:nrow(data.frame(rf_90)),y_denl_test )
  
   names(df1) = c("quantile_RF_L90","quantile_RF_U90", "Distribution_RF_L90","Distribution_RF_U90", "reduced_RF_L90","reduced_RF_U90", "reduced2_RF_L90","reduced2_RF_U90","id", "test")
 # plot
-    df1 = df1%>%  gather(variable, value, -id, -test, -quantile_RF_L90, -quantile_RF_U90, -Distribution_RF_L90, -Distribution_RF_U90)
+  df1 = df1%>%  gather(variable, value, -id, -test, -quantile_RF_L90, -quantile_RF_U90, -Distribution_RF_L90, -Distribution_RF_U90)
 
   ggplot(df1)+aes(x = id, y = value, colour = variable)+geom_line()+
     geom_point(aes(y=test), colour= "black")+
   scale_color_brewer(palette="Spectral")+labs(x = "test points", y = "NO2", colour = "prediction intervals")
    #
-  ggsave("dist_vs_qrf_notsq.png")
+  ggsave("dist_vs_qrf_sq.png")
  
 plot(rf_90[,1]  ,ylim = c(min(y_denl_test)-1,max(y_denl_test)+1),  typ = "l")
    lines(rf_90[,2])
@@ -226,10 +219,10 @@ mean_reg$predictions
   #val
 
   ### xgb: rf_lasso is better than rf, but xgb still is the best
-  xgb = xgboost(data = as.matrix(x_p[training,]),
-                label = y_denl[training],  max_depth =6, gamma=5, eta =0.007, nrounds =1000, lambda = 2, alpha = 0, subsample = 0.7 )
+  xgb = xgboost(data = as.matrix(x_train),
+                label = y_denl_train,  max_depth =6, gamma=5, eta =0.007, nrounds =1000, lambda = 2, alpha = 0, subsample = 0.7 )
   
-  xgbpre = predict(xgb, as.matrix(x_p[test,]))
+  xgbpre = predict(xgb, as.matrix(x_test))
   error_matrix(y_denl_test, xgbpre)
   
   
