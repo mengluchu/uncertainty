@@ -19,6 +19,7 @@ packages <- c( "devtools", "dplyr","distrree","data.table" , "scoringRules","ggp
                "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf",
                "quantregForest")
 ipak(packages)
+library(disttree)
 install_github("mengluchu/APMtools") 
 library(APMtools)
 ls("package:APMtools") 
@@ -27,18 +28,24 @@ resolution =100 # resolution of grid
 nboot = 12  # number of bootstraps
 y_var = "mean_value"
 prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
+prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi|Traffic"
 varstring = paste(prestring,y_var,sep="|")
  
-mergedall = read.csv("https://raw.githubusernrcontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+traffic = read.csv2("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/Traffic.csv", sep  = ";",na.strings="---")
+#mergedall = read.csv("~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_uc.csv")
+#traffic = read.csv2("~/Documents/GitHub/uncertainty/data_vis_exp/Traffic.csv", sep  = ";",na.strings="---")
 
+traffic = traffic%>%APMtools::subset_grep(grepstring = "Traffic|FID")
+mergedall = merge(mergedall, traffic, by.x = "X", by.y="FID")
 # do it for 100 m resolution, get rid of 25m resolution variables. 
 if (resolution ==100)
 {
   mergedall = mergedall%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
 } 
-
+write.csv(mergedall,"~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_traf.csv")
 df = mergedall
-df$mean_value = sqrt(mergedall$mean_value) # normalise for normal distribution 
+#df$mean_value = sqrt(mergedall$mean_value) # normalise for normal distribution 
 
 # to be written into a function
 num.trees = 1000  
@@ -70,6 +77,7 @@ pred.distribution <- predict(quantRF,
                                type = "quantiles",
                                quantiles = seq(0.01, 0.99, by = 0.01)) # get quantiles
  
+pred.distribution$predictions
 sd_reg<- predict(quantRF, data = x_test,type = "quantiles",what=sd)
 mean_reg <- predict(quantRF, data = x_test, type = "quantiles",what=mean)
 t.quant90 <- cbind( 
@@ -87,7 +95,8 @@ QRF_L90 <- predict(qrf, x_test, what = 0.05)
  
 #################################  use Lasso to aggregate random forest trees, implemented in APMtools 
 RF <- ranger(x = x_train,
-             y = y_denl_train, mtry = NULL, num.trees = 1000, min.node.size = 10)
+             y = y_denl_train, mtry = NULL, num.trees = 1000, min.node.size = 10,,importance = "permutation")
+RF$variable.importance%>%sort(decreasing = T) 
 
 allp = predict(RF,x_train,type = "response", predict.all = T)%>%predictions #get all the tree predictions, instead of the mean
 rpre= predict(RF,x_test, predict.all=T)%>%predictions # get all the tree predictions
@@ -146,9 +155,9 @@ for (tree in 1:num.trees){
  
     plot(rrf2_l90, rrf_l90)
     
-    error_matrix(y_denl_test,rrf2_mean)
-    error_matrix(y_denl_test,rrf_mean)
-    error_matrix(y_denl_test,predict(RF,x_test,type = "response")%>%predictions)
+    error_matrix(y_denl_test,rrf2_mean) # QRF
+    error_matrix(y_denl_test,rrf_mean) # Lasso + RF
+    error_matrix(y_denl_test,predict(RF,x_test,type = "response")%>%predictions) #RF
     
     ############################ compare #############################################
    
@@ -205,12 +214,17 @@ shapiro.test(pred.distribution$predictions[5,])
   
   # CRPS evaluration prob. forecast with scoring ranks: https://arxiv.org/pdf/1709.04743.pdf
 distcrps = crps(y = y_denl_test, family = "norm", mean = mu_, sd = sigma_) 
-rrfcrps = crps(y = y_denl_test, family = "norm", mean = rrf_mean, sd = rrf_sd) 
+rrfcrps = crps(y = y_denl_test, family = "norm", mean = rrf_mean, sd = rrf_sd) # lasso+rf
 rrf2crps = crps(y = y_denl_test, family = "norm", mean = rrf2_mean, sd = rrf2_sd) 
+ 
+rrfcrps2 = crps_sample(y = y_denl_test, reduced_rf, method = "edf") # lasso+rf "kde" is better the "edf" and better than assuming gaussian . 
+summary(rrfcrps)
+
+rrfcrps3 = crps_sample(y = y_denl_test, rpre, method = "edf") # rf,   "kde" is similar to  "edf" and better than assuming gaussian . 
+summary(rrfcrps3)
+regcrps = crps(y = y_denl_test, family = "norm", mean = as.vector(predictions(mean_reg)), sd =as.vector(sd_reg$predictions)) # mean and sd of the ranger quantile RF. 
   
-regcrps = crps(y = y_denl_test, family = "norm", mean = as.vector(predictions(mean_reg)), sd =as.vector(sd_reg$predictions)) 
-  
-summary(cbind(distcrps,rrfcrps,regcrps, rrf2crps))
+summary(cbind(rrfcrps,regcrps, rrf2crps))
 plot(distcrps, regcrps)
 mean_reg$predictions
   #val <- APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)

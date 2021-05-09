@@ -41,48 +41,85 @@ fnConstructMesh <- function(coo){
 #' If it config = TRUE we will get a res object with which we could call \code{inla.posterior.samples()}
 #' @param formulanew A string with the formula. If formulanew is NULL, the formula will be constructed as intercept + covnames + spatial effect
 #' @return list with the results of the fitted model, stk.full and mesh
-fnFitModelINLA <- function(d, dp, covnames, TFPOSTERIORSAMPLES, formulanew = NULL){
+#' 
+#' 
+#' 
+#' 
+#' Fits a spatial model using INLA and SPDE
+#' 
+#' It creates a mesh using coordinates d$coox and d$cooy
+#' Formula is passed in argument formula
+#' It creates stk.full with data for estimation or data for estimation and prediction (if TFPOSTERIORSAMPLES is TRUE)
+#' Calls \code{inla()} and returns list with result and stk.full
+#' 
+#' @param d Data frame with data for estimation that contains coordinates (coox, cooy), response variable (y) and covariates
+#' @param formula Formula for the model
+#' If \code{covnames} includes an intercept, \code{d} needs to have column of 1s for the intercept
+#' @param dp Data frame with data for prediction that contains coordinates (coox, cooy), and covariates
+#' If \code{covnames} includes an intercept, \code{dp} needs to have column of 1s for the intercept
+#' If dp is NULL, dp will not used to construct stk.full
+#' @param covnames Vector with the names of the intercept and covariates that are in the formula
+#' @param TFPOSTERIORSAMPLES Boolean variable to call \code{inla()} with config = TFPOSTERIORSAMPLES.
+#' If it config = TRUE we will get a res object with which we could call \code{inla.posterior.samples()}
+#' @return list with the results of the fitted model, stk.full and mesh
+fnFitModelINLA = function(d, dp, formula, covnames, TFPOSTERIORSAMPLES, family = "gaussian"){
   # Coordinates locations
-  coo <- cbind(d$coox, d$cooy)
+  coo = cbind(d$coox, d$cooy)
   # Mesh
-  mesh <- fnConstructMesh(coo)
+  mesh = fnConstructMesh(coo)
   # Building the SPDE model on the mesh
-  spde <- inla.spde2.matern(mesh = mesh, alpha = 2, constr = TRUE)
+  #  spde = inla.spde2.pcmatern(mesh, prior.range = c(500, .5), prior.sigma = c(2, 0.01))
+  spde = inla.spde2.matern(mesh = mesh, alpha = 2, constr = TRUE)
   # Index set
-  indexs <- inla.spde.make.index("s", spde$n.spde)
+  indexs = inla.spde.make.index("s", spde$n.spde)
   # Projection matrix
-  A <- inla.spde.make.A(mesh = mesh, loc = coo)
+  A = inla.spde.make.A(mesh = mesh, loc = coo)
   
   # Stack with data for estimation. Effects include intercept and covariates
-  stk.e <- inla.stack(tag = "est", data = list(y = d$y), A = list(1, A), effects = list(d[, covnames, drop = FALSE], s = indexs))
+  stk.e = inla.stack(tag = "est", data = list(y = d$y), A = list(1, A), effects = list(d[, covnames, drop = FALSE], s = indexs))
   if(is.null(dp)){
-    stk.full <- inla.stack(stk.e)
+    stk.full = inla.stack(stk.e)
   }else{
     # Prediction coordinate locations and projection matrix
-    coop <- cbind(dp$coox, dp$cooy)
-    Ap <- inla.spde.make.A(mesh = mesh, loc = coop)
+    coop = cbind(dp$coox, dp$cooy)
+    Ap = inla.spde.make.A(mesh = mesh, loc = coop)
     # stack  
-    stk.p <- inla.stack(tag = "pred", data = list(y = NA), A = list(1, Ap), effects = list(dp[, covnames, drop = FALSE], s = indexs))
-    stk.full <- inla.stack(stk.e, stk.p)
+    stk.p = inla.stack(tag = "pred", data = list(y = NA), A = list(1, Ap), effects = list(dp[, covnames, drop = FALSE], s = indexs))
+    stk.full = inla.stack(stk.e, stk.p)
   }
-  
-  # Formula
-  # covnames includes the intercept and the covariates
-  if(is.null(formulanew)){
-    formula <- as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
-  }
-  else{
-    formula <- formulanew
-  }
-  
-  # Call inla(). Add config = TRUE if we want to call inla.posterior.sample()
-  st1 <- Sys.time()
-  res <- inla(formula, data = inla.stack.data(stk.full), control.predictor = list(compute = TRUE, A = inla.stack.A(stk.full)),
-              control.compute = list(config = TFPOSTERIORSAMPLES))
-  st2 <- Sys.time()
+  cres = list(return.marginals.predictor = TRUE, return.marginals.random = TRUE)
+  cinla = list(strategy = 'adaptive', int.strategy = 'eb')  #
+  st1 = Sys.time()
+  if(family == "gaussian"){
+    # Formula that is specified in the arguments
+    res = inla(formula, family = "gaussian", data = inla.stack.data(stk.full), 
+               control.predictor = list(compute = TRUE, A = inla.stack.A(stk.full), link = 1),
+               control.compute = list(config = TFPOSTERIORSAMPLES, return.marginals = TRUE, dic=TRUE, waic = TRUE, cpo = TRUE), 
+               control.results = cres, control.inla = cinla,
+               verbose=TRUE)}
+  if(family == "Gamma"){
+    cres = list(return.marginals.predictor = TRUE, return.marginals.random = TRUE)
+    cinla = list(strategy = 'adaptive', int.strategy = 'eb')  #
+    st1 = Sys.time()
+    res = inla(formula, family = "Gamma", data = inla.stack.data(stk.full),
+               control.predictor = list(compute = TRUE, A = inla.stack.A(stk.full), link = 1),
+               control.compute = list(config = TFPOSTERIORSAMPLES, return.marginals = TRUE, dic=TRUE, waic = TRUE, cpo = TRUE),
+               control.results = cres, control.inla = cinla,
+               verbose=TRUE)}
+  if(family == "lognormal"){
+    cres = list(return.marginals.predictor = TRUE, return.marginals.random = TRUE)
+    cinla = list(strategy = 'adaptive', int.strategy = 'eb')  #
+    st1 = Sys.time()
+    res = inla(formula, family = "lognormal", data = inla.stack.data(stk.full),
+               control.predictor = list(compute = TRUE, A = inla.stack.A(stk.full), link = 1),
+               control.compute = list(config = TFPOSTERIORSAMPLES, return.marginals = TRUE, dic=TRUE, waic = TRUE, cpo = TRUE),
+               control.results = cres, control.inla = cinla,
+               verbose=TRUE)}
+  st2 = Sys.time()
   print(st2-st1)
   return(list(res, stk.full, mesh))
 }
+
 
 
 #' Computes the linear predictor from one of the samples of an object obtained with \code{inla.posterior.samples()
@@ -142,46 +179,51 @@ fnPredictFromPosteriorSample <- function(psamples, ite, res, mesh, dp, covnames)
 #' \code{pred_mean} is the posterior mean
 #' \code{pred_ll} and \code{pred_ul} are the lower and upper limits of 95%, 90%, 50% credible intervals
 #' \code{excprob} is the probability that hte prediction > cutoff value
-fnGetPredictions <- function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES, cutoff_exceedanceprob){
+#' 
+
+fnGetPredictions = function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES, cutoff_exceedanceprob){
   if(NUMPOSTSAMPLES == -1){
-    index <- inla.stack.index(stk.full, tag = "est")$data
-    d$excprob <- sapply(res$marginals.fitted.values[index],
-                        FUN = function(marg){1-inla.pmarginal(q = cutoff_exceedanceprob, marginal = marg)})
-    d$pred_mean <- res$summary.fitted.values[index, "mean"]
-    d$pred_ll <- res$summary.fitted.values[index, "0.025quant"]
-    d$pred_ul <- res$summary.fitted.values[index, "0.975quant"]
-    d$pred_ll90 <- unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.05, marginal = marg)}))
-    d$pred_ul90 <- unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.95, marginal = marg)}))
-    d$pred_ll50 <- unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.25, marginal = marg)}))
-    d$pred_ul50 <- unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.75, marginal = marg)}))
-    dres <- d
+    index = inla.stack.index(stk.full, tag = "est")$data
+    d$excprob = sapply(res$marginals.fitted.values[index],
+                       FUN = function(marg){1-inla.pmarginal(q = cutoff_exceedanceprob, marginal = marg)})
+    d$pred_mean = res$summary.fitted.values[index, "mean"]
+    d$pred_ll = res$summary.fitted.values[index, "0.025quant"]
+    d$pred_ul = res$summary.fitted.values[index, "0.975quant"]
+    d$pred_sd = res$summary.fitted.values[index, "sd"]
+    d$pred_ll90 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.05, marginal = marg)}))
+    d$pred_ul90 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.95, marginal = marg)}))
+    d$pred_ll50 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.25, marginal = marg)}))
+    d$pred_ul50 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.75, marginal = marg)}))
+    dres = d
   }
   if(NUMPOSTSAMPLES == 0){
-    index <- inla.stack.index(stk.full, tag = "pred")$data
-    dp$excprob <- sapply(res$marginals.fitted.values[index],
-                         FUN = function(marg){1-inla.pmarginal(q = cutoff_exceedanceprob, marginal = marg)})
-    dp$pred_mean <- res$summary.fitted.values[index, "mean"]
-    dp$pred_ll <- res$summary.fitted.values[index, "0.025quant"]
-    dp$pred_ul <- res$summary.fitted.values[index, "0.975quant"]
-    dp$pred_ll90 <- unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.05, marginal = marg)}))
-    dp$pred_ul90 <- unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.95, marginal = marg)}))
-    dp$pred_ll50 <- unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.25, marginal = marg)}))
-    dp$pred_ul50 <- unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.75, marginal = marg)}))
-    dres <- dp
+    index = inla.stack.index(stk.full, tag = "pred")$data
+    dp$excprob = sapply(res$marginals.fitted.values[index],
+                        FUN = function(marg){1-inla.pmarginal(q = cutoff_exceedanceprob, marginal = marg)})
+    dp$pred_mean = res$summary.fitted.values[index, "mean"]
+    dp$pred_ll = res$summary.fitted.values[index, "0.025quant"]
+    dp$pred_ul = res$summary.fitted.values[index, "0.975quant"]
+    dp$pred_sd = res$summary.fitted.values[index, "sd"]
+    dp$pred_ll90 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.05, marginal = marg)}))
+    dp$pred_ul90 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.95, marginal = marg)}))
+    dp$pred_ll50 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.25, marginal = marg)}))
+    dp$pred_ul50 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.75, marginal = marg)}))
+    dres = dp
   }
   
   if(NUMPOSTSAMPLES > 0){
-    psamples <- inla.posterior.sample(NUMPOSTSAMPLES, res)
-    ps <- sapply(1:NUMPOSTSAMPLES, fnPredictFromPosteriorSample, psamples = psamples, res = res, mesh = mesh, dp = dp, covnames = covnames)
-    dp$excprob <- apply(ps, 1, function(x){mean(x > cutoff_exceedanceprob)})
-    dp$pred_mean <- rowMeans(ps)
-    dp$pred_ll <- apply(ps, 1, function(x){quantile(x, 0.025)})
-    dp$pred_ul <- apply(ps, 1, function(x){quantile(x, 0.975)})
-    dp$pred_ll90 <- apply(ps, 1, function(x){quantile(x, 0.05)})
-    dp$pred_ul90 <- apply(ps, 1, function(x){quantile(x, 0.95)})
-    dp$pred_ll50 <- apply(ps, 1, function(x){quantile(x, 0.25)})
-    dp$pred_ul50 <- apply(ps, 1, function(x){quantile(x, 0.75)})
-    dres <- dp
+    psamples = inla.posterior.sample(NUMPOSTSAMPLES, res)
+    ps = sapply(1:NUMPOSTSAMPLES, fnPredictFromPosteriorSample, psamples = psamples, res = res, mesh = mesh, dp = dp, covnames = covnames)
+    dp$excprob = apply(ps, 1, function(x){mean(x > cutoff_exceedanceprob)})
+    dp$pred_mean = rowMeans(ps)
+    dp$pred_ll = apply(ps, 1, function(x){quantile(x, 0.025)})
+    dp$pred_ul = apply(ps, 1, function(x){quantile(x, 0.975)})
+    dp$pred_sd = res$summary.fitted.values[index, "sd"]
+    dp$pred_ll90 = apply(ps, 1, function(x){quantile(x, 0.05)})
+    dp$pred_ul90 = apply(ps, 1, function(x){quantile(x, 0.95)})
+    dp$pred_ll50 = apply(ps, 1, function(x){quantile(x, 0.25)})
+    dp$pred_ul50 = apply(ps, 1, function(x){quantile(x, 0.75)})
+    dres = dp
   }
   return(dres) 
 }
@@ -211,7 +253,7 @@ fnMLPredictionsCV = function(d, y_var= "y", training,  prestring =  "road|nightl
   merged_hex = as.h2o(td)
   
   rf = h2o.randomForest(y = y_var , x= x_var, training_frame = merged_hex, ntrees =1000,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
-  xgb = h2o.xgboost(y = y_var , x= x_var, training_frame = merged_hex, nfolds =10, ntrees =300, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, keep_cross_validation_predictions = T, seed =1 )
+  xgb = h2o.xgboost(y = y_var , x= x_var, training_frame = merged_hex, nfolds =10, ntrees =1000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, keep_cross_validation_predictions = T, seed =1 )
   las = h2o.glm(y = y_var , x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
   
   rf  =get_h2o_pred(rf)
@@ -237,7 +279,7 @@ fnMLPredictionsAll = function(d, y_var="y", training, test, prestring =  "road|n
   
   rf_all = h2o.randomForest(y = y_var, x= x_var, training_frame = merged_hex, ntrees =1000, seed =1 )
   rf  = as.data.frame(h2o.predict(object = rf_all, newdata = new_hex))$predict 
-  xgb_all = h2o.xgboost(y = y_var, x= x_var, training_frame = merged_hex, ntrees =300, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, seed =1 )
+  xgb_all = h2o.xgboost(y = y_var, x= x_var, training_frame = merged_hex, ntrees =1000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, seed =1 )
   xgb = as.data.frame(h2o.predict(object = xgb_all, newdata = new_hex))$predict 
   las_all = h2o.glm(y = y_var, x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =1, seed=1 )
   lasso  = as.data.frame(h2o.predict(object = las_all, newdata = new_hex))$predict 
@@ -256,45 +298,45 @@ fnMLPredictionsAll = function(d, y_var="y", training, test, prestring =  "road|n
 #' @param spatialsample if doing spatial sampling for validation, i.e. sample less in dense areas but more in sparse areas so that the points sampled are even in space. This may however not be needed in air pollution mapping, where the ground stations are dense in places where it should be. 
 
 #' @return Vector with the cross-validation results
-INLA_crossvali =  function(n, d, covnames, spatialsample = F){
+#' 
+#' 
+INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spatial", family = c("gaussian","Gamma","lognormal")){
   print(n)
   # Split data
-  smp_size <- floor(0.2 * nrow(d)) 
+  smp_size = floor(0.2 * nrow(d)) 
   set.seed(n)
-  
-  if(!(spatialsample)){
+  if(typecrossvali == "non-spatial"){
     test <- sample(seq_len(nrow(d)), size = smp_size)
-  }
-  if(spatialsample){
+    }
+  if(typecrossvali == "spatial"){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
     # We use locations of a spatially representative sample of the prediction surface
     # To obtain a valid data set, X% of the observations are sampled without replacement where
     # each observation has a probability of selection proportional to the area of the Voronoi polygon
     # surrounding its location, that is, the area closest to the location relative to the surrounding points
-    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+    p <- matrix(coordi, ncol = 2)
     v <- dismo::voronoi(p) # extent?
     prob_selection <- area(v)/sum(area(v))
     test <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
   }
-  
-  training <- seq_len(nrow(d))[-test] 
+  training = seq_len(nrow(d))[-test] 
   # Fit model
-  # Data for prediction
-  dp <- d
+  dtraining = d[training, ]
+  dptest = dp[test, ]
   
-  dtraining <- d[training, ]
-  dptest <- dp[test, ]
-  # Fit model
-  lres <- fnFitModelINLA(dtraining, dptest, covnames, TFPOSTERIORSAMPLES = FALSE, formulanew = NULL)
-  # Get predictions
-  dptest <- fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+  lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family =family)
+    # Get predictions
+  dptest = fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
   # Goodness of fit
-  val <- APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
-  val <- c(val, cor = cor(dptest$real, dptest$pred_mean))
+  val = APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
+  val = c(val, cor = cor(dptest$real, dptest$pred_mean))
+  inlacrps = crps(y =dptest$real, family = "norm", mean = dptest$pred_mean, sd =dptest$pred_sd) 
   
-  (val <- c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
-            covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
-            covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50)))
+  (val = c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
+           covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
+           covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50),
+           meancrps = mean(inlacrps),
+           mediancrps = median(inlacrps)))
   return(val)
 } 
 
@@ -349,17 +391,22 @@ INLA_stack_crossvali =  function(n, d, formula, covnames, spatialsample = F){
   
   
   # Fit model
-  lres <- fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE)
+  lres <-  fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
   # Get predictions
-  dptest <- fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
-  
+  dptest <- fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 3)
+ 
   # Goodness of fit
   val <- APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
   val <- c(val, cor = cor(dptest$real, dptest$pred_mean))
   print(val)
-  (val <- c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
-            covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
-            covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50)))
+  inlacrps = crps(y =dptest$real, family = "norm", mean = dptest$pred_mean, sd =dptest$pred_sd) 
+  
+  val = c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
+           covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
+           covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50),
+           meancrps = mean(inlacrps),
+           mediancrps = median(inlacrps))
+   
   
   return(val)
 } 
@@ -385,7 +432,7 @@ ensemble= function(d, n, y_var= "y", prestring =  "road|nightlight|population|te
   merged_hex = as.h2o(td)
   dptest= as.h2o(dptest)
   rf = h2o.randomForest(y = y_var , x= x_var, training_frame = merged_hex, ntrees =1000,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
-  xgb = h2o.xgboost(y = y_var , x= x_var, training_frame = merged_hex, nfolds =10, ntrees =300, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, keep_cross_validation_predictions = T, seed =1 )
+  xgb = h2o.xgboost(y = y_var , x= x_var, training_frame = merged_hex, nfolds =10, ntrees =1000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, keep_cross_validation_predictions = T, seed =1 )
   las = h2o.glm(y = y_var , x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
   
   ens = h2o.stackedEnsemble(y = y_var, x= x_var, training_frame = merged_hex, base_models = c(rf, xgb, las))

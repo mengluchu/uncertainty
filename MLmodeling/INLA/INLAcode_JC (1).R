@@ -5,7 +5,8 @@ library(INLA)
 library(APMtools)
 library(dismo) # for area() inside INLA_crossvali()
 library(caret)
-library("quantregForest")
+library(scoringRules)
+
 #' Creates triangulated mesh to fit a spatial model using INLA and SPDE
 #' 
 #' @param coo coordinates to create the mesh
@@ -163,14 +164,16 @@ fnPredictFromPosteriorSample = function(psamples, ite, res, mesh, dp, covnames){
 #' \code{pred_mean} is the posterior mean
 #' \code{pred_ll} and \code{pred_ul} are the lower and upper limits of 95%, 90%, 50% credible intervals
 #' \code{excprob} is the probability that hte prediction > cutoff value
+
 fnGetPredictions = function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES, cutoff_exceedanceprob){
   if(NUMPOSTSAMPLES == -1){
     index = inla.stack.index(stk.full, tag = "est")$data
     d$excprob = sapply(res$marginals.fitted.values[index],
-                        FUN = function(marg){1-inla.pmarginal(q = cutoff_exceedanceprob, marginal = marg)})
+                       FUN = function(marg){1-inla.pmarginal(q = cutoff_exceedanceprob, marginal = marg)})
     d$pred_mean = res$summary.fitted.values[index, "mean"]
     d$pred_ll = res$summary.fitted.values[index, "0.025quant"]
     d$pred_ul = res$summary.fitted.values[index, "0.975quant"]
+    d$pred_sd = res$summary.fitted.values[index, "sd"]
     d$pred_ll90 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.05, marginal = marg)}))
     d$pred_ul90 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.95, marginal = marg)}))
     d$pred_ll50 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.25, marginal = marg)}))
@@ -180,10 +183,11 @@ fnGetPredictions = function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES
   if(NUMPOSTSAMPLES == 0){
     index = inla.stack.index(stk.full, tag = "pred")$data
     dp$excprob = sapply(res$marginals.fitted.values[index],
-                         FUN = function(marg){1-inla.pmarginal(q = cutoff_exceedanceprob, marginal = marg)})
+                        FUN = function(marg){1-inla.pmarginal(q = cutoff_exceedanceprob, marginal = marg)})
     dp$pred_mean = res$summary.fitted.values[index, "mean"]
     dp$pred_ll = res$summary.fitted.values[index, "0.025quant"]
     dp$pred_ul = res$summary.fitted.values[index, "0.975quant"]
+    dp$pred_sd = res$summary.fitted.values[index, "sd"]
     dp$pred_ll90 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.05, marginal = marg)}))
     dp$pred_ul90 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.95, marginal = marg)}))
     dp$pred_ll50 = unlist(lapply(res$marginals.fitted.values[index], FUN = function(marg){inla.qmarginal(p = 0.25, marginal = marg)}))
@@ -198,6 +202,7 @@ fnGetPredictions = function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES
     dp$pred_mean = rowMeans(ps)
     dp$pred_ll = apply(ps, 1, function(x){quantile(x, 0.025)})
     dp$pred_ul = apply(ps, 1, function(x){quantile(x, 0.975)})
+    dp$pred_sd = res$summary.fitted.values[index, "sd"]
     dp$pred_ll90 = apply(ps, 1, function(x){quantile(x, 0.05)})
     dp$pred_ul90 = apply(ps, 1, function(x){quantile(x, 0.95)})
     dp$pred_ll50 = apply(ps, 1, function(x){quantile(x, 0.25)})
@@ -206,7 +211,6 @@ fnGetPredictions = function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES
   }
   return(dres) 
 }
-
 
 
 #' Calculates cross-validation measures obtained by fitting a spatial model using INLA and SPDE
@@ -222,11 +226,10 @@ fnGetPredictions = function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES
 INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spatial", family = ""){
   print(n)
   # Split data
-  smp_size = floor(0.8 * nrow(d)) 
+  smp_size = floor(0.2 * nrow(d)) 
   set.seed(n)
   if(typecrossvali == "non-spatial"){
-    training = sample(seq_len(nrow(d)), size = smp_size)
-    test = seq_len(nrow(d))[-training] 
+    test <- sample(seq_len(nrow(d)), size = smp_size)
   }
   if(typecrossvali == "spatial"){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
@@ -234,21 +237,28 @@ INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spa
     # To obtain a valid data set, X% of the observations are sampled without replacement where
     # each observation has a probability of selection proportional to the area of the Voronoi polygon
     # surrounding its location, that is, the area closest to the location relative to the surrounding points
-    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+    p <- matrix(coordi, ncol = 2)
     v <- dismo::voronoi(p) # extent?
     prob_selection <- area(v)/sum(area(v))
-    test <- sample(seq_len(nrow(d)), size = nrow(d)-smp_size, prob = prob_selection, replace = TRUE)
-    train = sample(seq_len(nrow(d)), size = smp_size)
-    training = seq_len(nrow(d))[-train] 
+    test <- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
   }
+  training = seq_len(nrow(d))[-test] 
   # Fit model
   dtraining = d[training, ]
   dptest = dp[test, ]
-     
-   
+  
+  # INI CODE MENG
+  # Add to d[, training] 3 variables with names lasso, rf, xgb that are predictions at locations coox and cooy calculated using cross-validation with the dataset d[, training]
+  #dtraining = fnMLPredictionsCV(d[, training])
+  # Add to dp[test, ] 3 variables with names lasso, rf, xgb that are predictions at locations coox and cooy calculated using all data in d[, training]
+  #dptest = fnMLPredictionsAll(dp[, test])
+  # END CODE MENG
+  
+  
   # Fit model
   if(family == "gaussian"){
-  lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")}
+  lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
+  }
   if(family == "Gamma"){
     lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "Gamma")}
   if(family == "lognormal"){
@@ -258,33 +268,23 @@ INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spa
   # Goodness of fit
   val = APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
   val = c(val, cor = cor(dptest$real, dptest$pred_mean))
+  inlacrps = crps(y =dptest$real, family = "norm", mean = dptest$pred_mean, sd =dptest$pred_sd) 
+   
+  
   (val = c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
             covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
-            covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50)))
-  
-    
+            covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50),
+             meancrps = mean(inlacrps),
+           mediancrps = median(inlacrps)))
   return(val)
 } 
 
 
+# data
 
-
-##################################################
-
-
-#setwd("C:/Users/Usuario/Desktop/Projects/2021/KAUST/INLA")
 d = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
-
-#d = read.csv("dat2.csv", header = T)
-head(d, 3)
-
-
-
-
-#=======================================
-# Data for estimation. Create variables y with the response, coox and cooy with the coordinates, and b0 with the intercept (vector of 1s)
-d$y = sqrt(d$mean_value) # response transform sqrt (GAUSSIAN distribution)
-#d$y = d$mean_value #     # For GAMMA distribution
+head(d)
+d$y = d$mean_value #     # For GAMMA distribution
 d$coox = d$Longitude
 d$cooy = d$Latitude
 d$b0 = 1 # intercept
@@ -293,19 +293,70 @@ d$real = d$y
 # d$lasso = d$lasso10f_pre
 # d$rf = d$rf10f_pre
 # d$xgb = d$xgb10f_pre
+d$Countrycode  = as.factor(d$Countrycode)
+d$MeasurementType  = as.factor(d$MeasurementType)
+d$AirQualityStationType = as.factor(d$AirQualityStationType)
+d$AirQualityStationArea = as.factor(d$AirQualityStationArea)
 d$urbantype = as.factor(d$urbantype)
 
-#======================================
 # Data for prediction
 dp = d
-# Variables for stacked generalization
-# dp$lasso = dp$lasso_all_pre
-# dp$rf = dp$rf_all_pre
-# dp$xgb = dp$xgb_all_pre
+
+covnames = c("b0", "nightlight_450", "population_1000", "population_3000", 
+             "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
+             "trop_mean_filt", "road_class_1_100")
+
+#, "Countrycode",  "urbantype"
+
+formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
+
+#====
+# Cross-validation
+VLA = lapply(1:20, FUN = INLA_crossvali, d = d, dp = dp, formula = formula, covnames = covnames, 
+             typecrossvali = "non-spatial", family = "gaussian")
+
+VLA = lapply(1:20, FUN = INLA_crossvali, d = d, dp = dp, formula = formula, covnames = covnames, 
+             typecrossvali = "non-spatial", family = "Gamma")
+
+(VLA = data.frame(LA = rowMeans(data.frame(VLA))))
 
 
 
+### 9 covariants, no factors, similar to with countrycode + urbantype###############################################
+INLA
 
+RMSE          7.0591956
+RRMSE         0.2976992
+IQR           7.1178696
+rIQR          0.3274910
+MAE           5.2745167
+rMAE          0.2224680
+rsq           0.6881695
+explained_var 0.6890229
+cor           0.8323308
+covprob95     0.4718750
+covprob90     0.4052083
+covprob50     0.1588542
+meancrps      4.4632668
+mediancrps    2.8302416
+
+RANDOM FOREST
+RMSE          7.3959306
+RRMSE         0.3163311
+IQR           7.2229966
+rIQR          0.3379717
+MAE           5.4140659
+rMAE          0.2315181
+rsq           0.6698874
+explained_var 0.6685857
+covprob90     0.9357639
+meancrps      3.8356147
+mediancrps    2.7981472
+#=======================================
+# Data for estimation. Create variables y with the response, coox and cooy with the coordinates, and b0 with the intercept (vector of 1s)
+#d$y = sqrt(d$mean_value) # response transform sqrt (GAUSSIAN distribution)
+#d$y = d$mean_value #     # For GAMMA distribution
+ 
 # MODEL 1
 # Model with covariates selected with lasso
 covnames = c("b0", "nightlight_450", "population_1000", "population_3000",
@@ -313,32 +364,39 @@ covnames = c("b0", "nightlight_450", "population_1000", "population_3000",
               "road_class_3_3000", "road_class_1_100", "road_class_3_100",
               "road_class_3_5000", "road_class_1_300", "road_class_1_500",
               "road_class_2_1000", "nightlight_3150", "road_class_2_300", "road_class_3_1000", 
-             "temperature_2m_7","urbantype")
+             "temperature_2m_7")
 
-# # MODEL 2 10 from lasso and add urbantype
-#covnames = c("b0", "nightlight_450", "population_1000", "population_3000",
-#             "road_class_1_5000", "road_class_2_100", "road_class_3_300", "trop_mean_filt",
-#             "road_class_3_3000", "road_class_1_100", "road_class_3_100",
-#             "urbantype")
+# # MODEL 2
+covnames = c("b0", "nightlight_450", "population_1000", "population_3000",
+             "road_class_1_5000", "road_class_2_100", "road_class_3_300", "trop_mean_filt",
+             "road_class_3_3000", "road_class_1_100", "road_class_3_100",
+             "road_class_3_5000", "road_class_1_300", "road_class_1_500",
+             "road_class_2_1000", "nightlight_3150", "road_class_2_300", "road_class_3_1000",
+             "temperature_2m_7", "urbantype")
+
+
+# # MODEL 3
+covnames = c("b0", "nightlight_450", "population_1000", "population_3000", 
+               "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
+               "trop_mean_filt", "road_class_1_100", "Countrycode",  "urbantype")
 
 covnames = c("b0", "nightlight_450", "population_1000", "population_3000", 
              "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
-             "trop_mean_filt", "road_class_1_100", "urbantype")
-#"road_class_3_5000", "road_class_1_300", "road_class_1_500",
-#"road_class_2_1000", "nightlight_3150", "road_class_2_300", "road_class_3_1000",
-#"temperature_2m_7", 
+             "trop_mean_filt", "road_class_1_100")
+"MeasurementType", 
+"AirQualityStationType", "AirQualityStationArea",
 
-
-
-
-
-formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
-
-
-
-# Call inla()
+################
+######test
+#################
+lres = fnFitModelINLA(d, dp = dp, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
 lres = fnFitModelINLA(d, dp = dp, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
 
+lres = fnFitModelINLA(data.frame(x_train), data.frame(y_denl_test), formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
+lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
+lres[[1]]$summary.fitted.values$mean
+length(lres[[1]]$summary.fitted.values$mean)
+str(lres[[1]]$summary.fitted.values)
 # Metrics (for comparative purposes)
 lres[[1]]$waic$waic
 sum(lres[[1]]$cpo$failure, na.rm = TRUE)
@@ -355,6 +413,7 @@ slcpo <- function(m, na.rm = TRUE) {
   - sum(log(m$cpo$cpo), na.rm = na.rm)
 }
 slcpo(lres[[1]])
+
 
 
 res = lres[[1]]
@@ -374,12 +433,8 @@ mean(dres$pred_ll50 <= dres$real &  dres$real <= dres$pred_ul50)
 
 
 
-# Cross-validation
-VLA = lapply(1:20, FUN = INLA_crossvali, d = d, dp = dp, formula = formula, covnames = covnames, 
-             typecrossvali = "non-spatial", family = "gaussian")
 
-(VLA = data.frame(LA = rowMeans(data.frame(VLA))))
-names(dp)
+
 
 # Posterior predictive distribution
 N = length(d$mean_value)
@@ -390,77 +445,4 @@ sim = inla.posterior.sample(N, res)
 s = sim[[1]]$latent
 tail(s[,1], n=3)
 
-plot(s[,1], typ = "l")
-str(sim)
 
-
-
-library(ranger)
-library(dplyr)
-n =1
-y_var = "mean_value"
-prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
-varstring = paste(prestring,y_var,sep="|")
-
-for (n in 1:2){
-  covnames0 <-covnames  
-  
-  set.seed(n)
-  smp_size <- floor(0.8 * nrow(d)) 
-  
-  training <- sample(seq_len(nrow(d)), size = smp_size)
-  test = seq_len(nrow(d))[-training] 
-  
-  y_denl = d[,y_var]
-  y_denl_test = y_denl[test] 
-  x_p = d%>%dplyr::select(matches(varstring))%>%dplyr::select(-y_var)
-  
-  quantRF <- ranger(x = x_p[training,],
-                    y = y_denl[training], mtry = NULL, num.trees = 1000,
-                    quantreg = T) 
-  # compute predictions (mean) for each validation site
-  pred <- predict(quantRF, data = x_p[test,], what = mean)
-  
-  
-  ## ----investigate-single-point,echo=FALSE,fig.pos='!h',fig.height=5,fig.width=4,fig.align='center', out.width='0.4\\textwidth',fig.cap= "Histogram of predictive distribution for one single prediction point (dotted lines: 90 \\% prediction interval, dashed line: mean prediction)."----
-  
-  ## predict 0.01, 0.02,..., 0.99 quantiles for validation data
-  pred.distribution <- predict(quantRF,
-                               data = x_p[test,], 
-                               type = "quantiles",
-                               quantiles = seq(0.01, 0.99, by = 0.01))
-  
-  
-  
-  t.quant90 <- cbind( 
-    pred.distribution$predictions[, "quantile= 0.05"],
-    pred.distribution$predictions[, "quantile= 0.95"])
-  # INLA
-  
-  d <- d[, c("mean_value", "Longitude", "Latitude", covnames0)]
-  
-  # covnames0 <- NULL
-  covnames <- c("b0", covnames0)  # covnames is intercept and covnames0
-  
-  d$y <- d$mean_value # response
-  d$coox <- d$Longitude
-  d$cooy <- d$Latitude
-  d$b0 <- 1 # intercept
-  d$real <- d$y
-  dp <- d
-  dtraining <- d[training, ]
-  dptest <- dp[test, ]
-  # Fit model
-  lres <- fnFitModelINLA(d, dp = dp, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
-
-  # Get predictions
-  dptest <- fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
-  coordi = c(d$Longitude, d$Latitude)
-  p <- matrix(coordi, ncol = 2)
-     
-  inla_90= cbind(dptest$pred_ll90,dptest$pred_ul90)
-  rf_90 = t.quant90
-  plot(inla_90[,1], ylim = c(-30,65), col = "red", typ = "l")
-  lines(rf_90[,1])
-  lines(inla_90[,2], col = "red")
-  lines(rf_90[,2])}
