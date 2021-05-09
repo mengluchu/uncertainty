@@ -350,7 +350,7 @@ INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spa
 #' If \code{covnames} includes an intercept, \code{d} needs to have column of 1s for the intercept
 #' @param covnames Vector with the names of the intercept and covariates to be included in the formula
 #' @return Vector with the cross-validation results
-INLA_stack_crossvali =  function(n, d, formula, covnames, spatialsample = F){
+INLA_stack_crossvali =  function(n, d, formula, covnames, spatialsample = F,family = "gaussian"){
   
   print(n)
   # Split data
@@ -391,7 +391,7 @@ INLA_stack_crossvali =  function(n, d, formula, covnames, spatialsample = F){
   
   
   # Fit model
-  lres <-  fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
+  lres <-  fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = family)
   # Get predictions
   dptest <- fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 3)
  
