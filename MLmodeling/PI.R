@@ -107,7 +107,7 @@ cvfit = glmnet::cv.glmnet(allp,y_denl_train,
 # aggregate using a regularization, here lasso, you can also do elastic net, training alpha or specify alpha between 0 and 1
 print(sum(coef(cvfit)[-1]!= 0))
 # we can also plot it, using a tool from APMtools
-Ls= Lassoselected(cvfit)
+Ls= lassoselected(cvfit)
 Ls_num= as.vector(sapply(Ls, function(x) as.numeric(substr(x, start =2, stop = nchar(x)))))
 n = length(test)
 # aggregating trees using lasso, compare with original random forest, obtained better results

@@ -18,9 +18,9 @@ fnConstructMesh <- function(coo){
   # cutoff: minimum allowed distance between points used to avoid building many small triangles around clustered locations
   (cutoff <- 1/10000*max(dist(coo)))
   mesh <- inla.mesh.2d(loc = coo, offset = c(offset1, offset2), cutoff = cutoff, max.edge = c(maxedge1, maxedge2))
-  plot(mesh)
-  points(coo, col = "red")
-  print(mesh$n)
+  #plot(mesh)
+ # points(coo, col = "red")
+#  print(mesh$n)
   return(mesh)
 }
 
@@ -300,7 +300,7 @@ fnMLPredictionsAll = function(d, y_var="y", training, test, prestring =  "road|n
 #' @return Vector with the cross-validation results
 #' 
 #' 
-INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spatial", family = c("gaussian","Gamma","lognormal")){
+INLA_crossvali =  function(n, d, dp, formula=as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)")), covnames, typecrossvali = "non-spatial", family = c("gaussian","Gamma","lognormal")){
   print(n)
   # Split data
   smp_size = floor(0.2 * nrow(d)) 
@@ -398,7 +398,7 @@ INLA_stack_crossvali =  function(n, d, formula, covnames, spatialsample = F,fami
   # Goodness of fit
   val <- APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
   val <- c(val, cor = cor(dptest$real, dptest$pred_mean))
-  print(val)
+  #print(val)
   inlacrps = crps(y =dptest$real, family = "norm", mean = dptest$pred_mean, sd =dptest$pred_sd) 
   
   val = c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities

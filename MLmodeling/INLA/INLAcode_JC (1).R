@@ -223,7 +223,7 @@ fnGetPredictions = function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES
 #' @param covnames Vector with the names of the intercept and covariates to be included in the formula
 #' @param typecrossvali string that denotes if cross-validation is spatial ("crossvalispatial") or not ("crossvalinotspatial")
 #' @return Vector with the cross-validation results
-INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spatial", family = ""){
+INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spatial", family = "gaussian"){
   print(n)
   # Split data
   smp_size = floor(0.2 * nrow(d)) 
@@ -260,7 +260,8 @@ INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spa
   lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
   }
   if(family == "Gamma"){
-    lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "Gamma")}
+    lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "Gamma")
+    }
   if(family == "lognormal"){
     lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "lognormal")}
   # Get predictions
@@ -300,7 +301,7 @@ d$AirQualityStationArea = as.factor(d$AirQualityStationArea)
 d$urbantype = as.factor(d$urbantype)
 
 # Data for prediction
-dp = d
+#dp = d
 
 covnames = c("b0", "nightlight_450", "population_1000", "population_3000", 
              "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
@@ -312,10 +313,10 @@ formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(
 
 #====
 # Cross-validation
-VLA = lapply(1:20, FUN = INLA_crossvali, d = d, dp = dp, formula = formula, covnames = covnames, 
+VLA = lapply(1:2, FUN = INLA_crossvali, d = d, dp = d, formula = formula, covnames = covnames, 
              typecrossvali = "non-spatial", family = "gaussian")
 
-VLA = lapply(1:20, FUN = INLA_crossvali, d = d, dp = dp, formula = formula, covnames = covnames, 
+VLA = lapply(1:3, FUN = INLA_crossvali, d = d, dp = dp, formula = formula, covnames = covnames, 
              typecrossvali = "non-spatial", family = "Gamma")
 
 (VLA = data.frame(LA = rowMeans(data.frame(VLA))))
@@ -340,6 +341,22 @@ covprob50     0.1588542
 meancrps      4.4632668
 mediancrps    2.8302416
 
+inla stack
+RMSE          6.8304501
+RRMSE         0.2881862
+IQR           6.8005092
+rIQR          0.3129836
+MAE           4.9774928
+rMAE          0.2100544
+rsq           0.7078598
+explained_var 0.7087453
+cor           0.8436318
+covprob95     0.3619792
+covprob90     0.3229167
+covprob50     0.1526042
+meancrps      4.4443950
+mediancrps    2.8995560
+
 RANDOM FOREST
 RMSE          7.3959306
 RRMSE         0.3163311
@@ -352,6 +369,33 @@ explained_var 0.6685857
 covprob90     0.9357639
 meancrps      3.8356147
 mediancrps    2.7981472
+
+
+RFLA
+ 
+RMSE	7.2585945			# 2000 tree, 1000 tree 7.35
+RMSE	0.3063016			
+IQR	7.4536561			
+rIQR	0.3421052			
+MAE	5.3389242			
+rMAE	0.2254031			
+rsq	0.6702110			
+explained_var	0.6710277			
+meancrps	3.8073067			
+mediancrps	2.8014975	
+
+
+XGB
+
+RMSE	7.1419036			
+RRMSE	0.3012486			
+IQR	6.5439964			
+rIQR	0.3008942			
+MAE	5.0493054			
+rMAE	0.2130932			
+rsq	0.6817985			
+explained_var	0.6824490			
+
 #=======================================
 # Data for estimation. Create variables y with the response, coox and cooy with the coordinates, and b0 with the intercept (vector of 1s)
 #d$y = sqrt(d$mean_value) # response transform sqrt (GAUSSIAN distribution)
@@ -389,7 +433,7 @@ covnames = c("b0", "nightlight_450", "population_1000", "population_3000",
 ################
 ######test
 #################
-lres = fnFitModelINLA(d, dp = dp, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
+lres = fnFitModelINLA(d, dp = dp, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "Gamma")
 lres = fnFitModelINLA(d, dp = dp, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
 
 lres = fnFitModelINLA(data.frame(x_train), data.frame(y_denl_test), formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")

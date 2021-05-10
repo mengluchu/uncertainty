@@ -24,7 +24,7 @@ ipak <- function(pkg){
     install.packages(new.pkg, dependencies = TRUE , repos='http://cran.muenster.r-project.org')
   sapply(pkg, require, character.only = TRUE)
 }
-packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf", "CAST", "caret", "quantregForest", "pdp", "h2o", "dismo")
+packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf", "CAST", "caret", "quantregForest", "pdp", "h2o", "dismo","scoringRules")
 ipak(packages)
 install_github("mengluchu/APMtools") 
 library(APMtools)
@@ -35,7 +35,7 @@ ls("package:APMtools")
 Variables used:
 ```{r}
 resolution =100 # resolution of grid
-nboot = 12  # number of bootstraps
+nboot = 20  # number of bootstraps
 y_var = "mean_value"
 prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
 varstring = paste(prestring,y_var,sep="|")
@@ -320,13 +320,14 @@ q_rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", co
     test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
   }
 training = seq_len(nrow(df))[-test] 
-  q_rf_LUR(df, numtrees =  1000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =varstring)} 
+  q_rf_LUR(df, numtrees =  2000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =varstring)} 
 qrf = lapply(1:nboot, df = merged, y_var = y_var, q_rf_crossvali )
  qrf = data.frame(QRF = rowMeans(data.frame(qrf)))
  qrf
 ```
  
 ```{r}
+ 
 rf_la_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
   smp_size <- floor(0.2* nrow(df)) 
   set.seed(n)
@@ -344,8 +345,9 @@ rf_la_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", c
     prob_selection <- area(v)/sum(area(v))
     test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
   }
+ 
 training = seq_len(nrow(df))[-test] 
-rf_Lasso_LUR(df, numtrees =  1000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =varstring)
+result = rf_Lasso_LUR(df, numtrees =  3000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =prestring)
 } 
 rfla= lapply(1:nboot, df = merged, y_var = y_var,rf_la_crossvali )
 rfla = data.frame(RFLA = rowMeans(data.frame(rfla)))
@@ -366,10 +368,10 @@ h2o.init()
  
 set.seed(n)
  
-smp_size <- floor(0.8 * nrow(df)) 
+smp_size <- floor(0.2 * nrow(df)) 
   
-training <- sample(seq_len(nrow(df)), size = smp_size)
-test = seq_len(nrow(df))[-training] 
+test <- sample(seq_len(nrow(df)), size = smp_size)
+training = seq_len(nrow(df))[-test] 
   
 x_var = setdiff(names(merged), y_var) # predictor names
  
@@ -387,7 +389,7 @@ test_hex = as.h2o(test_xy)
 # model and predict on all the data
 
 
-xgb  = h2o.xgboost(y = y_var, x= x_var, training_frame = train_hex ,ntrees =1000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, seed =1, distribution = "gamma" )
+xgb  = h2o.xgboost(y = y_var, x= x_var, training_frame = train_hex ,ntrees = 1000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, seed =1, distribution = "gamma" )
 
 xgb_pre = as.data.frame(h2o.predict(object = xgb, newdata = test_hex))$predict 
 h2o.removeAll()
@@ -395,11 +397,15 @@ APMtools::error_matrix (validation = y_test, prediction = xgb_pre)
 }
 
 rg = lapply(1:nboot, df = merged, y_var = y_var, xgbgamma_cv  )
-rg = data.frame(XGB_GAMMA = rowMeans(data.frame(rg)))
-rg#gamma
+rg2 = data.frame(XGB_GAMMA = rowMeans(data.frame(rg)))
+rg2#gamma
+```
+```{r}
+h2o.removeAll()
 ```
 
-```{r}
+deprecated
+```{r, eval=FALSE}
 rfgamma_cv = function(n,df, y_var){
 h2o.init()
  
@@ -438,10 +444,9 @@ rg#gamma
 
  
 ```
-```{r}
-rg
 
-```
+
+ 
  
 #### Spatial cross-validation
 Sp1 is purely spatial, sp2 and sp3 more specific for air quality, based on the local environment of ground stations. sp2 is easily applicable to the grid. sp3 depends on how to define e.g. traffic vs. background. 
@@ -456,35 +461,192 @@ Sp1 is purely spatial, sp2 and sp3 more specific for air quality, based on the l
 
 Creating grid and add a column of cell id to dataframe 
 ```{r creatgrid}
-grid1 = st_make_grid(locations_sf, 1)
+grid1 = st_make_grid(locations_sf, 2) # 64 grids #20 grids
 grid1%>%plot  
 stc = st_join(st_sf(grid1), locations_sf,join=st_intersects )
 stc$grp = sapply(st_equals(stc), max)
- 
-#plot(stc["grp"])
-merged2 = stc%>%select(c(colnames(merged), grp))
+
+
+merged2 = na.omit(stc%>%dplyr::select(c(colnames(merged), grp)))
+merged2$grp%>%unique()
+
 ```
 
-Train using caret, and CAST to quickly create index for it,which applys caret createFolds
+Train using h2o is more convenient than caret and CAST to quickly create index for it,which applys caret createFolds
 
-```{r}
+```{r, eval= False}
 indices = CreateSpacetimeFolds(merged2,
   spacevar = "grp",
   timevar = NA,
   k = 10,
   class = NA,
   seed = 1
-)
-merged3 = merged2%>%select(c(colnames(merged)))
+ 
+rfGrid <-  expand.grid( mtry =20 )
+merged3 = merged2%>%dplyr::select(c(colnames(merged)))
+merged
 st_geometry(merged3) <- NULL
 predic = merged3%>%dplyr::select(-y_var)
 model_LLO = train(predic, merged3[,y_var],
-                   method="rf", ntree = 1000, importance=TRUE,
+                   method="rf", ntree = 2000, importance=TRUE,
                    trControl=trainControl(method="cv",
-                                          index = indices$index))
+                                          index = indices$index),
+                    tuneGrid = rfGrid)
 
-model_LLO
+model_LLO$results
+
+# RMSE 7.252046	R2 0.6617782	 MAE 5.327708	 
 ```
+```{r}
+m20 = data.frame(merged2)%>%dplyr::select(c(colnames(merged), 'grp'))%>%mutate(grp = as.factor(grp))
+m2 = as.h2o(m20)
+names(m2)
+```
+
+```{r}
+
+
+xgb  = h2o.xgboost(training_frame = m2,y = "mean_value",ntrees = 1000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, seed =1, fold_column="grp", keep_cross_validation_fold_assignment= TRUE,)
+
+```
+
+```{r}
+
+
+rf  = h2o.randomForest(training_frame = m2,y = "mean_value",ntrees = 1000, seed =1, fold_column="grp", keep_cross_validation_fold_assignment= TRUE)
+
+```
+```{r}
+rf #  7.5， oob 7.2
+
+xgbcv = rf@model$cross_validation_metrics_summary%>%as.data.frame()%>%dplyr::select(-sd, -mean) 
+xgbcv = apply(t(xgbcv), 2, as.numeric)
+plot(xgbcv[,4], ylim = c(0,1), typ = "l")
+#data.frame(xgbcv,h2o.cross_validation_fold_assignment(xgb))
+#h2o.cross_validation_fold_assignment(xgb) 
+m3 = distinct(merged2)
+m3$r2 = ifelse(xgbcv[,4]<0, 0, xgbcv[,4] )
+
+m3$rmse= xgbcv[,6]
+xgb # 7.286278
+h2o.removeAll()
+```
+```{r}
+require(tidyverse)
+source("https://raw.githubusercontent.com/mengluchu/uncertainty/master/MLmodeling//INLA/INLA_util.R")
+
+INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spatial", family = "gaussian"){
+  print(n)
+  # Split data
+  X<-split(d,  d$grp)
+  dptest= X[[n]] 
+   
+  dtraining = anti_join(d,X[[1]])
+   
+  # Fit model
+  if(family == "gaussian"){
+  lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
+  }
+  if(family == "Gamma"){
+    lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "Gamma")
+    }
+  if(family == "lognormal"){
+    lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "lognormal")}
+  # Get predictions
+  dptest = fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+  # Goodness of fit
+  val = APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
+  val = c(val, cor = cor(dptest$real, dptest$pred_mean))
+  inlacrps = crps(y =dptest$real, family = "norm", mean = dptest$pred_mean, sd =dptest$pred_sd) 
+   
+  
+  (val = c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
+            covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
+            covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50),
+             meancrps = mean(inlacrps),
+           mediancrps = median(inlacrps)))
+  return(val)
+} 
+
+
+# data
+locations_sf$Latitude = mergedall$Latitude
+locations_sf$Longitude = mergedall$Longitude
+
+
+ stc = st_join(st_sf(grid1), locations_sf,join=st_intersects )
+stc$grp = sapply(st_equals(stc), max)
+
+d = data.frame(na.omit(stc))%>%dplyr::select(c(colnames(merged), 'grp', "Longitude", "Latitude"))%>%
+  mutate(grp = as.factor(grp))
+
+d$y = d$mean_value #     # For GAMMA distribution
+d$coox = d$Longitude
+d$cooy = d$Latitude
+d$b0 = 1 # intercept
+d$real = d$y
+# Variables for stacked generalization
+# d$lasso = d$lasso10f_pre
+# d$rf = d$rf10f_pre
+# d$xgb = d$xgb10f_pre
+names(d)
+ 
+   
+covnames = c("b0", "nightlight_450", "population_1000", "population_3000", 
+             "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
+             "trop_mean_filt", "road_class_1_100")
+
+#, "Countrycode",  "urbantype"
+
+formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
+
+#====
+# Cross-validation
+n = d$grp%>%unique()%>%length()
+VLA = lapply(1:20, FUN = INLA_crossvali, d = d, dp = d, formula = formula, covnames = covnames,  typecrossvali = "non-spatial", family = "gaussian")
+
+```
+
+```{r}
+
+xgbcv = xgb@model$cross_validation_metrics_summary%>%as.data.frame()%>%dplyr::select(-sd, -mean) 
+xgbcv = apply(t(xgbcv), 2, as.numeric)
+plot(xgbcv[,4], ylim = c(0,1), typ = "l")
+#data.frame(xgbcv,h2o.cross_validation_fold_assignment(xgb))
+#h2o.cross_validation_fold_assignment(xgb) 
+m3 = distinct(merged2)
+m3$r2 = ifelse(xgbcv[,4]<0, 0, xgbcv[,4] )
+
+m3$rmse= xgbcv[,6]
+xgb # 7.286278
+h2o.removeAll()
+```
+
+```{r}
+plot(m3['r2'],key.pos = 4)
+plot(m3['rmse'],key.pos = 4)
+
+
+library("mapview")
+library("RColorBrewer")
+ 
+mapviewOptions(
+  basemaps = c("OpenStreetMap.Mapnik","Esri.OceanBasemap")
+  , raster.palette = colorRampPalette(rev(brewer.pal(9, "PiYG")))
+  , vector.palette = colorRampPalette(brewer.pal(9, "PuBuGn"))
+  , na.color = "gray"
+  , layers.control.pos = "topright"
+  , viewer.suppress = TRUE # open browser
+)
+
+ 
+a = mapview(m3['r2'],layer.name= "XGB-R2")
+a
+mapview(m3['r2'],layer.name= "R2",col.regions =rev(brewer.pal(11, "PiYG")), at = seq(0, 0.8, 0.1)) + mapview(locations_sf["urbantype_chara"],col.regions = c(brewer.pal(3, "Paired")[2],brewer.pal(3, "Accent")[1:2],brewer.pal(3, "Dark2")[1]), layer.name= "NO2", cex = 4)
+#mapshot(a, file = paste0(getwd(), "/R2map.png")) 
+crop_center(r, 150,  vis= T)
+```
+
 
 
 
