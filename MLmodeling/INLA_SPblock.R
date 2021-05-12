@@ -87,8 +87,18 @@ xgb_spcv =  function(n,d, y_var,typecrossvali = "crossvalinotspatial", coordi = 
   
 } 
 
+qrf_spcv =  function(n,d, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+  
+  d$id = 1 :nrow(d) # assign a new id because the rowname does not match the index. because rf_lasso_LUR takes indices for traing and testing.
+  X<-split(d,  d$grp)
+  dptest= X[[n]] # test id 
+  test = dptest$id 
+  training = setdiff(d$id, test) 
+  q_rf_LUR(d, numtrees =  2000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =varstring)} 
 
+} 
 
+ 
 
 # data
 locations_sf$Latitude = mergedall$Latitude
@@ -130,6 +140,7 @@ n = d$grp%>%unique()%>%length()
 VLA = lapply(1:20, FUN = INLA_cvsp, d = d, dp = d, formula = formula, covnames = covnames,  typecrossvali = "non-spatial", family = "gaussian")
 rfla= lapply(1:20, d =d, y_var = y_var,rf_la_spcv)
 xgb= lapply(1:20, d =d, y_var = y_var,xgb_spcv)
+qrf= lapply(1:20, d =d, y_var = y_var,qrf_spcv)
 
 #rfla = data.frame(RFLA = rowMeans(data.frame(rfla)))
  
