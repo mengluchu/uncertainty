@@ -319,13 +319,14 @@ shapiro.test(d$y)
 gamma_test(d$y)
 hist = ggplot(d, aes(x=y))+xlab( expression(NO[2]~(~mu~g/m^3))) + 
   geom_histogram(binwidth = 1, aes(y=..density..), colour="black", fill="white")+geom_density(alpha=.1, fill="#FF6666") 
-d
-original <- ggplot(d, aes(Longitude, Latitude)) +
-  geom_point(aes(colour= y)) +
-  #  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
-  theme(plot.title = element_text(hjust = 0))+ scale_color_gradientn(colours = c(viridis(100, begin = 0.3, end = 0.9),rev( magma(100, begin = 0.3))), limits = c(0,48),name = expression(NO[2]~(~mu~g/m^3)))+
-  geom_point(aes(colour=y)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
 
+original <- ggplot(d, aes(Longitude, Latitude)) +
+  geom_point(aes(colour=AirQualityStationType)) +
+  #  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  theme(plot.title = element_text(hjust = 0))+ 
+  scale_color_manual(values =brewer.pal(3,"Set2"), name = expression(NO[2]~(~mu~g/m^3)))+
+  geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
+original
 ggsave("~/Documents/GitHub/uncertainty/histogram_NO2.png")
 qq=ggqqplot(d$y)
 ggsave("~/Documents/GitHub/uncertainty/ggplot_NO2.png")
