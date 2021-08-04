@@ -27,7 +27,7 @@ if (resolution ==100)
 }  
 
 merged = mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
-
+table(mergedall$urbantype_chara)
 locations_sf = st_as_sf(mergedall, coords = c("Longitude","Latitude"), crs=4642)
  
 

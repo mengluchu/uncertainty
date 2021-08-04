@@ -226,8 +226,6 @@ fnGetPredictions = function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES
     dres = dp
   }
   return(dres) 
-}
-
 
 #' get h2o cv results from a h2o model and return a df
 #' @param h2omodel h2omodel
@@ -437,11 +435,12 @@ ensemble= function(d, n, y_var= "y", prestring =  "road|nightlight|population|te
   
   ens = h2o.stackedEnsemble(y = y_var, x= x_var, training_frame = merged_hex, base_models = c(rf, xgb, las))
   dtest <- fnMLPredictionsAll(d=d, training = training, test = test)
-  
-  pred = h2o.predict(object =ens, newdata = dtest)$predict 
-  head(pred)
-  pred = as.h2o(pred)
+  dtesth2o = as.h2o(dtest)
+  #print(dtest)
+  pred = as.data.frame(h2o.predict(object =ens, newdata = dtesth2o))$predict 
+
   val = APMtools::error_matrix(validation = ytest, prediction = pred)
+  
   h2o.removeAll()
   return(val)
 }

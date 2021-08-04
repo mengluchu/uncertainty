@@ -47,13 +47,14 @@ fnConstructMesh = function(coo){
 #' @param TFPOSTERIORSAMPLES Boolean variable to call \code{inla()} with config = TFPOSTERIORSAMPLES.
 #' If it config = TRUE we will get a res object with which we could call \code{inla.posterior.samples()}
 #' @return list with the results of the fitted model, stk.full and mesh
+
 fnFitModelINLA = function(d, dp, formula, covnames, TFPOSTERIORSAMPLES, family = ""){
   # Coordinates locations
   coo = cbind(d$coox, d$cooy)
   # Mesh
   mesh = fnConstructMesh(coo)
   # Building the SPDE model on the mesh
-#  spde = inla.spde2.pcmatern(mesh, prior.range = c(500, .5), prior.sigma = c(2, 0.01))
+  #  spde = inla.spde2.pcmatern(mesh, prior.range = c(500, .5), prior.sigma = c(2, 0.01))
   spde = inla.spde2.matern(mesh = mesh, alpha = 2, constr = TRUE)
   # Index set
   indexs = inla.spde.make.index("s", spde$n.spde)
@@ -76,12 +77,12 @@ fnFitModelINLA = function(d, dp, formula, covnames, TFPOSTERIORSAMPLES, family =
   cinla = list(strategy = 'adaptive', int.strategy = 'eb')  #
   st1 = Sys.time()
   if(family == "gaussian"){
-  # Formula that is specified in the arguments
-  res = inla(formula, family = "gaussian", data = inla.stack.data(stk.full), 
-              control.predictor = list(compute = TRUE, A = inla.stack.A(stk.full), link = 1),
-              control.compute = list(config = TFPOSTERIORSAMPLES, return.marginals = TRUE, dic=TRUE, waic = TRUE, cpo = TRUE), 
-              control.results = cres, control.inla = cinla,
-              verbose=TRUE)}
+    # Formula that is specified in the arguments
+    res = inla(formula, family = "gaussian", data = inla.stack.data(stk.full), 
+               control.predictor = list(compute = TRUE, A = inla.stack.A(stk.full), link = 1),
+               control.compute = list(config = TFPOSTERIORSAMPLES, return.marginals = TRUE, dic=TRUE, waic = TRUE, cpo = TRUE), 
+               control.results = cres, control.inla = cinla,
+               verbose=TRUE)}
   if(family == "Gamma"){
     cres = list(return.marginals.predictor = TRUE, return.marginals.random = TRUE)
     cinla = list(strategy = 'adaptive', int.strategy = 'eb')  #
@@ -100,11 +101,19 @@ fnFitModelINLA = function(d, dp, formula, covnames, TFPOSTERIORSAMPLES, family =
                control.compute = list(config = TFPOSTERIORSAMPLES, return.marginals = TRUE, dic=TRUE, waic = TRUE, cpo = TRUE),
                control.results = cres, control.inla = cinla,
                verbose=TRUE)}
+  if(family == "beta"){
+    cres = list(return.marginals.predictor = TRUE, return.marginals.random = TRUE)
+    cinla = list(strategy = 'adaptive', int.strategy = 'eb')  #
+    st1 = Sys.time()
+    res = inla(formula, family = "beta", data = inla.stack.data(stk.full),
+               control.predictor = list(compute = TRUE, A = inla.stack.A(stk.full), link = 1),
+               control.compute = list(config = TFPOSTERIORSAMPLES, return.marginals = TRUE, dic=TRUE, waic = TRUE, cpo = TRUE),
+               control.results = cres, control.inla = cinla,
+               verbose=TRUE)}
   st2 = Sys.time()
   print(st2-st1)
-  return(list(res, stk.full, mesh))
+  return(list(res, stk.full, mesh, coo, coop))
 }
-
 
 
 
@@ -303,23 +312,229 @@ d$urbantype = as.factor(d$urbantype)
 # Data for prediction
 #dp = d
 
-covnames = c("b0", "nightlight_450", "population_1000", "population_3000", 
-             "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
-             "trop_mean_filt", "road_class_1_100")
+# distributin
+library(ggpubr)
 
+shapiro.test(d$y)
+gamma_test(d$y)
+hist = ggplot(d, aes(x=y))+xlab( expression(NO[2]~(~mu~g/m^3))) + 
+  geom_histogram(binwidth = 1, aes(y=..density..), colour="black", fill="white")+geom_density(alpha=.1, fill="#FF6666") 
+d
+original <- ggplot(d, aes(Longitude, Latitude)) +
+  geom_point(aes(colour= y)) +
+  #  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  theme(plot.title = element_text(hjust = 0))+ scale_color_gradientn(colours = c(viridis(100, begin = 0.3, end = 0.9),rev( magma(100, begin = 0.3))), limits = c(0,48),name = expression(NO[2]~(~mu~g/m^3)))+
+  geom_point(aes(colour=y)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
+
+ggsave("~/Documents/GitHub/uncertainty/histogram_NO2.png")
+qq=ggqqplot(d$y)
+ggsave("~/Documents/GitHub/uncertainty/ggplot_NO2.png")
+ggplot()+geom_histogram(data.frame(d$y))
+library(fastshap)
+g=grid.arrange(original, hist,qq, ncol = 3)
+ggsave("~/Documents/GitHub/uncertainty/histqq_NO2.png",g, height = 6, width = 18)
+#p-value < 0.05 implying that the distribution of the data are significantly different from normal distribution. 
+#covnames = c("b0", "nightlight_450", "population_1000", "population_3000", 
+#             "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
+ #            "trop_mean_filt", "road_class_1_100")
+
+covnames = c("b0", "nightlight_450", "population_1000", "population_3000",
+             "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
+             "trop_mean_filt", "road_class_1_100", "urbantype", "Countrycode")
 #, "Countrycode",  "urbantype"
 
 formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
 
 #====
+#smp_size = floor(0.2 * nrow(d)) 
+#set.seed(1)
+#test <- sample(seq_len(nrow(d)), size = smp_size)
+#training = seq_len(nrow(d))[-test] 
+
+#dtrain = d[training, ]
+#dtest = d[test, ]
+
+#lres = fnFitModelINLA(d= dtrain, dp = dtest, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
+
+lres  <- fnFitModelINLA(d, dp = d, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
+
+
+#=========================================
+#     Get predicted data on grid
+#=========================================
+library(leaflet)
+library(gridExtra)
+library(rgdal)
+index.pred <- inla.stack.index(lres[[2]], "pred")$data
+
+pred_mean <- lres[[1]]$summary.fitted.values[index.pred, "mean"]
+pred_ll <- lres[[1]]$summary.fitted.values[index.pred, "0.025quant"]
+pred_ul <- lres[[1]]$summary.fitted.values[index.pred, "0.975quant"]
+
+
+summary(lres[[1]])
+lres[[1]]$summary.fixed
+lres[[1]]$summary.random
+summary(lres[[1]])
+#==============================
+#     Plot of predictions
+#==============================
+shapefile <- readOGR(dsn = "/Users/menglu/Documents/GitHub/uncertainty/shapefiles/", layer = "shape2")
+
+
+data_pred = data.frame(pred_mean, pred_ll, pred_ul, lres[[5]][, 1], lres[[5]][, 2])
+colnames(data_pred) <- c("pred_mean", "pred_ll", "pred_ul", "Longitude", "Latitude")
+
+
+mean_plot <- ggplot(data_pred, aes(Longitude, Latitude)) +
+  geom_point(aes(colour= pred_mean)) +
+  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  xlab("") +  ggtitle("Mean prediction") +
+  theme(plot.title = element_text(hjust = 0))+
+  geom_point(aes(colour= pred_mean)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
+
+upper_plot <- ggplot(data_pred, aes(Longitude, Latitude)) +
+  geom_point(aes(colour= pred_ul)) +
+  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  xlab("") +  ggtitle("Upper prediction") +
+  theme(plot.title = element_text(hjust = 0))+
+  geom_point(aes(colour= pred_mean)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
+
+lower_plot <- ggplot(data_pred, aes(Longitude, Latitude)) +
+  geom_point(aes(colour= pred_ll)) +
+  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  ggtitle("Lower prediction") +
+  theme(plot.title = element_text(hjust = 0))+
+  geom_point(aes(colour= pred_mean)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
+
+#x11()
+library(viridis)
+original <- ggplot(d, aes(Longitude, Latitude)) +
+  geom_point(aes(colour= y)) +
+#  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  ggtitle("Observation") +
+  theme(plot.title = element_text(hjust = 0))+ scale_color_gradientn(colours = c(viridis(100, begin = 0.3, end = 0.9),rev( magma(100, begin = 0.3))), limits = c(0,48))+
+  geom_point(aes(colour=y)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
+ 
+
+grid.arrange( mean_plot, upper_plot, lower_plot, original,ncol = 1)
+library(tidyverse)
+library(RColorBrewer)
+#difference
+res_dif = data.frame(obs_predmean = d$y- data_pred$pred_mean,   obs_predul = d$y- data_pred$pred_ul, obs_predll = d$y- data_pred$pred_ll,  lat =d$Latitude, lon = d$Longitude)
+gres = gather(res_dif, "key", "value",-lat, -lon)
+ggplot(gres, aes(lon,lat)) +
+  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  ggtitle("Observation - INLA prediction") +
+  theme(plot.title = element_text(hjust = 0, size = 10),strip.text.x = element_text(size = 15, colour = "black", angle = 0))+
+  geom_point(aes(colour=value)) +facet_wrap(~key)+ 
+  geom_polygon(data = shapefile, colour = "black",aes(x = long, y = lat, group = group), fill = NA) + scale_color_gradientn(colours =brewer.pal(11, "BrBG"))
+ggsave("~/Documents/GitHub/uncertainty/dif_obs_INLA.png",height = 12, width = 20)
+
+#library(tidyverse)
+# prediction
+resdf = data.frame(observation =d$y, prediction_mean = data_pred$pred_mean, prediction_upper = data_pred$pred_ul,prediction_lower = data_pred$pred_ll, lat =d$Latitude, lon = d$Longitude)
+
+gres = gather(resdf, "key", "value",-lat, -lon)
+
+ggplot(gres, aes(lon,lat)) +
+  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  ggtitle("Observation vs. INLA prediction") +
+  theme(plot.title = element_text(hjust = 0, size = 10),strip.text.x = element_text(size = 15, colour = "black", angle = 0))+
+  geom_point(aes(colour=value)) +facet_wrap(~key)+ 
+  geom_polygon(data = shapefile, colour = "black",aes(x = long, y = lat, group = group), fill = NA) + scale_color_gradientn(colours = c(viridis(100, begin = 0.3, end = 0.9),rev( magma(100, begin = 0.3))), limits = c(0,48))
+  
+ggsave("~/Documents/GitHub/uncertainty/pred.png",height = 12, width = 20)
+
+#c(rev(viridis(100, begin = 0.3, end = 0.7)), magma(100, begin = 0.3))
+#scale_color_gradient(low = "#3B9AB2",
+                                                                                                                           high = "#EBCC2A", limits=c(15, 35))
+#scale_fill_gradient()
+#  scale_fill_continuous(type = "viridis")
+#  scale_color_gradientn(colours = wes_palette("Zissou1"), values =c(0,0.1,0.2,0.3,0.4,0.5,0.7,0.8,0,9), breaks=c(10, 15,20,25,30,45,60))
+ #   scale_color_continuous(values=wes_palette(n=3, name="GrandBudapest2"))
+ #   c("#3B9AB2", "#78B7C5", "#EBCC2A", "#E1AF00", "#F21A00", "#F21A00")
+
+#======================================================
+#    Posterior mean and sd of the spatial random field
+#======================================================
+
+#==========================
+#     First option
+#==========================
+rang <- apply(lres[[3]]$loc[, c(1, 2)], 2, range)
+proj <- inla.mesh.projector(lres[[3]], xlim = rang[, 1], ylim = rang[, 2], dims = c(300, 300))
+
+mean_field <- inla.mesh.project(proj, lres[[1]]$summary.random$s$mean)
+sd_field   <- inla.mesh.project(proj, lres[[1]]$summary.random$s$sd)
+
+
+dat <- expand.grid(x = proj$x, y = proj$y)
+dat$mean_field <- as.vector(mean_field)
+dat$sd_field <- as.vector(sd_field)
+
+
+library(viridis)
+library(cowplot)
+gmean <- ggplot(dat, aes(x = x, y = y, fill = mean_field)) +
+  geom_raster() +
+  scale_fill_viridis(na.value = "transparent") +
+  coord_fixed(ratio = 1) + theme_bw() +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
+
+ggsave("~/Documents/GitHub/uncertainty/meanrf.png",height = 12, width = 8)
+
+gsd <-   ggplot(dat, aes(x = x, y = y, fill = sd_field)) +
+  geom_raster() +
+  scale_fill_viridis(na.value = "transparent") +
+  coord_fixed(ratio = 1) + theme_bw() +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
+
+grid.arrange(gmean, gsd)  
+ggsave("~/Documents/GitHub/uncertainty/field_mean_sd.png")
+#==========================
+#     Second option
+#==========================
+# Second option
+library(fields)
+#x11()
+par(mfrow=c(1,2), mar=c(4,4,3,5))
+image.plot(x=proj$x, y=proj$y, z=mean_field, asp=1,xlab='Longitude', ylab='Latitude')
+plot(shapefile, add=T)
+title(main="Mean for the spatial random field")
+
+image.plot(x=proj$x, y=proj$y, z=sd_field, asp=1,xlab='Longitude', ylab = "")
+plot(shapefile, add=T)
+title(main="SD for the spatial random field")
+
+
+#==========================
+#     Third option
+#==========================
+#par(mfrow=c(1,2), mar=c(4,4,3,5))
+image.plot(x=proj$x, y=proj$y, z=mean_field, asp=1,xlab='Longitude', ylab='Latitude')
+bnd <- inla.mesh.boundary(lres[[3]])
+inter <- inla.mesh.interior(lres[[3]])
+#lines(inter[[1]], col=1, lwd=3)
+#plot(lres[[3]], add = T, draw.segments = TRUE)
+lines(inter[[1]], col=1, lwd=1)
+title(main="Mean for the spatial random field")
+
+
+image.plot(x=proj$x, y=proj$y, z=sd_field, asp=1,xlab='Longitude', ylab = "")
+plot(lres[[3]], add = T)
+lines(inter[[1]], col=1, lwd=1)
+title(main="SD for the spatial random field")
+
+
+
+#################################
 # Cross-validation
-VLA = lapply(1:2, FUN = INLA_crossvali, d = d, dp = d, formula = formula, covnames = covnames, 
+VLAg = lapply(1:20, FUN = INLA_crossvali, d = d, dp = d, formula = formula, covnames = covnames, 
              typecrossvali = "non-spatial", family = "gaussian")
 
-VLA = lapply(1:3, FUN = INLA_crossvali, d = d, dp = dp, formula = formula, covnames = covnames, 
+VLAma = lapply(1:20, FUN = INLA_crossvali, d = d, dp = d, formula = formula, covnames = covnames, 
              typecrossvali = "non-spatial", family = "Gamma")
 
-(VLA = data.frame(LA = rowMeans(data.frame(VLA))))
+(VLA = data.frame(LA = rowMeans(data.frame(VLAma))))
 
 
 
@@ -340,6 +555,21 @@ covprob90     0.4052083
 covprob50     0.1588542
 meancrps      4.4632668
 mediancrps    2.8302416
+inla-gamma
+RMSE          9.2097417
+RRMSE         0.3884733
+IQR           7.4233032
+rIQR          0.3408081
+MAE           6.1709306
+rMAE          0.2600607
+rsq           0.4524605
+explained_var 0.4556077
+cor           0.7702674
+covprob95     0.4333333
+covprob90     0.3645833
+covprob50     0.1541667
+meancrps      5.1042150
+mediancrps    2.9689934
 
 inla stack
 RMSE          6.8304501
@@ -433,8 +663,9 @@ covnames = c("b0", "nightlight_450", "population_1000", "population_3000",
 ################
 ######test
 #################
-lres = fnFitModelINLA(d, dp = dp, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "Gamma")
-lres = fnFitModelINLA(d, dp = dp, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
+
+lres = fnFitModelINLA(d=d[1:372,], dp = d[1:372,], covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "Gamma")
+lres = fnFitModelINLA(d=d[1:372,], dp = d[373:472,], covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
 
 lres = fnFitModelINLA(data.frame(x_train), data.frame(y_denl_test), formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
 lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
@@ -458,24 +689,76 @@ slcpo <- function(m, na.rm = TRUE) {
 }
 slcpo(lres[[1]])
 
+###
+### test
+smp_size = floor(0.2 * nrow(d)) 
+set.seed(1)
+test <- sample(seq_len(nrow(d)), size = smp_size)
+training = seq_len(nrow(d))[-test] 
 
+dtrain = d[training, ]
+dtest = d[test, ]
+
+lres = fnFitModelINLA(d= dtrain, dp = dtest, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
 
 res = lres[[1]]
 #res = improved.result
 stk.full = lres[[2]]
 mesh = lres[[3]]
 
+
 # Get predictions. NUMPOSTSAMPLES = -1 calculated with estimation data, 0 with prediction data, 1 with inla.posterior.samples()
-dres = fnGetPredictions(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+dres = fnGetPredictions(res, stk.full, mesh, d =dtrain, dp=dtest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+ysim = rnorm(n = nrow(dtest), mean = dres$pred_mean, sd = dres$pred_sd)
+plot(ysim, typ = "l")
+inlacrps = crps(y =dtest$real, family = "norm", mean = dres$pred_mean, sd =dres$pred_sd) 
 
-# Goodness of fit
-APMtools::error_matrix(validation = dres$real, prediction = dres$pred_mean)
-cor(dres$real, dres$pred_mean)
-mean(dres$pred_ll <= dres$real &  dres$real <= dres$pred_ul)
-mean(dres$pred_ll90 <= dres$real &  dres$real <= dres$pred_ul90)
-mean(dres$pred_ll50 <= dres$real &  dres$real <= dres$pred_ul50)
+APMtools::error_matrix(dres$pred_mean, dtest$real)
+
+par(mfrow = c(1,1))
+ 
+plot(dtest$real, typ= "b", ylim = c(0,60))
+points(inlacrps, col = "blue")
+lines(inlacrps, col = "blue")
+#lines(ysim)
+#points(ysim)
+lines(dres$pred_mean, col ="red")
+points(dres$pred_mean, col ="red")
+legend("topright", legend = c("real","pred_INLA","cprs_INLA"),col = c("black","red","blue"), pch =1)
+
+hist(d$real)
+hist(ysim)
+q_rf_LUR
+library(ranger)
+formula = as.formula(paste0('y ~', paste0(covnames, collapse = '+')))
+
+#===
+quantRF <- ranger(formula, data = dtrain, num.trees = 2000, 
+                    importance = "permutation", quantreg = T)
+
+pred.distribution <- predict(quantRF, data = dtest, type = "quantiles", 
+                               quantiles = seq(0.01, 0.99, by = 0.01))
+
+pred <- predictions(predict(quantRF, data = dtest, what = mean))
+rfcrps = crps_sample(y = dtest$real, pred.distribution$predictions, 
+                       method = "edf")
+points(rfcrps, col = "green")
+lines(rfcrps, col = "green")
+lines(pred, col = "brown")
+points(pred, col = "brown")
+legend("topright", legend = c("real","pred_INLA", "pred_rf", "cprs_INLA", "cprs_RF"),
+       col = c("black","red", "brown","blue", "green"), pch =1)
 
 
+
+par(mfrow = c(2,1))
+ysim_gaussian = rnorm(n = length(dtest$real), mean = dres$pred_mean, sd = dres$pred_sd)
+plot(dtest$real, typ= "l", col = "red")
+lines(ysim_gaussian)
+
+ysim_gamma =  rgamma(n = length(dtest$real), dres$pred_mean*(dres$pred_sd), dres$pred_sd)
+plot(dtest$real, typ= "l", col = "red")
+lines(ysim_gamma)
 
 
 

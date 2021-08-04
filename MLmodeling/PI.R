@@ -15,7 +15,7 @@ ipak <- function(pkg){
     install.packages(new.pkg, dependencies = TRUE , repos='http://cran.muenster.r-project.org')
   sapply(pkg, require, character.only = TRUE)
 }
-packages <- c( "devtools", "dplyr","distrree","data.table" , "scoringRules","ggplot2" , "RColorBrewer", 
+packages <- c( "devtools", "dplyr","disttree","data.table" , "scoringRules","ggplot2" , "RColorBrewer", 
                "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf",
                "quantregForest")
 ipak(packages)

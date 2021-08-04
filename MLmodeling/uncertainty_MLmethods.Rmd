@@ -361,8 +361,8 @@ stargazer(df,summary = F, digits = 2)
 
 Loss distribution is gamma 
 ```{r}
-n = 1 
-df = merged 
+#n = 1 
+#33df = merged 
 xgbgamma_cv = function(n,df, y_var){
 h2o.init()
  
@@ -399,50 +399,12 @@ APMtools::error_matrix (validation = y_test, prediction = xgb_pre)
 rg = lapply(1:nboot, df = merged, y_var = y_var, xgbgamma_cv  )
 rg2 = data.frame(XGB_GAMMA = rowMeans(data.frame(rg)))
 rg2#gamma
+
+df = data.frame(Lasso = VLA,RF = Vrf, XGB = V2, XGB_Gamma =rg2, RF_Lasso = rfla[1:8,])
+stargazer(df,summary = F, digits = 2)
 ```
 ```{r}
 h2o.removeAll()
-```
-
-deprecated
-```{r, eval=FALSE}
-rfgamma_cv = function(n,df, y_var){
-h2o.init()
- 
-set.seed(n)
- 
-smp_size <- floor(0.8 * nrow(df)) 
-  
-training <- sample(seq_len(nrow(df)), size = smp_size)
-test = seq_len(nrow(df))[-training] 
-  
-x_var = setdiff(names(merged), y_var) # predictor names
- 
-train_xy = df[training,]
-test_xy = df[test,]
-y_train = train_xy[, y_var]
-y_test = test_xy[, y_var]
-x_train = train_xy%>%dplyr::select(x_var)
-x_test = test_xy%>%dplyr::select(x_var)
-
-train_hex = as.h2o(train_xy)
-test_hex = as.h2o(test_xy)
-  
-
-# model and predict on all the data
-
-rf = h2o.randomForest(y = y_var, x= x_var, training_frame = train_hex, ntrees =1000, seed =1, distribution = "gamma" )
-
-rf_pre = as.data.frame(h2o.predict(object = rf, newdata = test_hex))$predict 
-h2o.removeAll()
-APMtools::error_matrix (validation = y_test, prediction = rf_pre)
-}
-
-rg = lapply(1:nboot, df = merged, y_var = y_var, rfgamma_cv  )
-rg = data.frame(rf_GAMMA = rowMeans(data.frame(rg)))
-rg#gamma
-
- 
 ```
 
 
@@ -570,12 +532,82 @@ plotspcv(rf)
  
 
 
+```{r}
+INLA_crossvali2 =  function(n, test, training, d, dp, formula, covnames, typecrossvali = "non-spatial", family = "gaussian"){
+ 
+  dtraining = d[training, ]
+  dptest = dp[test, ]
+  
+  # INI CODE MENG
+  # Add to d[, training] 3 variables with names lasso, rf, xgb that are predictions at locations coox and cooy calculated using cross-validation with the dataset d[, training]
+  #dtraining = fnMLPredictionsCV(d[, training])
+  # Add to dp[test, ] 3 variables with names lasso, rf, xgb that are predictions at locations coox and cooy calculated using all data in d[, training]
+  #dptest = fnMLPredictionsAll(dp[, test])
+  # END CODE MENG
+  
+  
+  # Fit model
+  if(family == "gaussian"){
+  lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
+  }
+  if(family == "Gamma"){
+    lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "Gamma")
+    }
+  if(family == "lognormal"){
+    lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "lognormal")}
+  # Get predictions
+  dptest = fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+  # Goodness of fit
+  val = APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
+  val = c(val, cor = cor(dptest$real, dptest$pred_mean))
+  inlacrps = crps(y =dptest$real, family = "norm", mean = dptest$pred_mean, sd =dptest$pred_sd) 
+   
+  
+  (val = c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
+            covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
+            covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50),
+             meancrps = mean(inlacrps),
+           mediancrps = median(inlacrps)))
+  return(val)
+} 
+
+d = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+head(d)
+d$y = d$mean_value #     # For GAMMA distribution
+d$coox = d$Longitude
+d$cooy = d$Latitude
+d$b0 = 1 # intercept
+d$real = d$y
+# Variables for stacked generalization
+# d$lasso = d$lasso10f_pre
+# d$rf = d$rf10f_pre
+# d$xgb = d$xgb10f_pre
+d$Countrycode  = as.factor(d$Countrycode)
+d$MeasurementType  = as.factor(d$MeasurementType)
+d$AirQualityStationType = as.factor(d$AirQualityStationType)
+d$AirQualityStationArea = as.factor(d$AirQualityStationArea)
+d$urbantype = as.factor(d$urbantype)
+
+# Data for prediction
+#dp = d
+
+covnames = c("b0", "nightlight_450", "population_1000", "population_3000", 
+             "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
+             "trop_mean_filt", "road_class_1_100")
+
+#, "Countrycode",  "urbantype"
+
+formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
+
+```
  
 #### SP2 customized
 - "tr_hp": close to roads, high population
 - "tr_mlp": close to roads, middle-low population 
 - "f": far away from roads 
 ```{r}
+
+
 sp2_cv =  function(n, df_type= c("tr_hp", "tr_mlp", "f") , df_model, y_var) {
    
 set.seed(n)
@@ -585,46 +617,64 @@ b= df_model%>%filter((road_class_2_100 > 0 | road_class_1_100 > 0 |road_class_3_
  
 #fartr_highpop
 c= df_model%>%filter((road_class_2_100 == 0 & road_class_1_100 == 0 & road_class_3_100 < quantile(road_class_3_100, .5)))  
+print(nrow(a))
+print(nrow(b))
+print(nrow(c))
+#85 65 177
 
- 
 methodID = switch(df_type,  "tr_hp"=1,"tr_mlp" =2,"f"=3  ) 
 totest = switch(methodID,a,b,c)
 
  
 others = setdiff(df_model, totest)
-orderedall=rbind(totest, others)
+orderedall=rbind(totest, others) #order data
 nrow(orderedall)
 
-test_size = floor(0.07*nrow(df_model)) # 30  is about 20% of traffic, use a consistent size about 7% of data
+#each time use 7% of the data satisfying with the conditions for testing. 
+#test_size = floor(0.07*nrow(df_model)) # 30  is about 20% of traffic, use a consistent size about 7% of data
+test_size = floor(0.07*nrow(df_model)) # 8  is about 6% of traffic, use a consistent size about 2% of data
+
 test = sample(nrow(totest), size = test_size) # sample 20% from e.g. traffic and then use others as training 
 training = setdiff(seq_len(nrow(df_model)), test)
 
-XGB = xgboost_LUR(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 3000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7) 
-RF = rf_LUR(orderedall, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
-LA = Lasso(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
-cbind(LA,RF,XGB)
+#XGB = xgboost_LUR(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 300, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7) 
+#RF = rf_LUR(orderedall, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+#LA = Lasso(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
+
+
+
+INLA = INLA_crossvali2(d = orderedall, dp =orderedall, formula = formula, covnames = covnames,   typecrossvali = "non-spatial", family = "gaussian",training=training, test=test)
+#cbind(LA,RF,XGB,INLA)
 }  
 
-tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
-tr_lmp= lapply(1:nboot, df_type ="tr_mlp", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
-far= lapply(1:nboot, df_type ="f", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+#tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+#tr_lmp= lapply(1:nboot, df_type ="tr_mlp", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+#far= lapply(1:nboot, df_type ="f", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
 
+tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =d, y_var = y_var, sp2_cv)%>%data.frame() 
+tr_lmp= lapply(1:nboot, df_type ="tr_mlp", df_model =d, y_var = y_var, sp2_cv)%>%data.frame() 
+far= lapply(1:nboot, df_type ="f", df_model =d, y_var = y_var, sp2_cv)%>%data.frame() 
 
 F1 = function(m, pre, f=quote(summary), nvaria) {apply(pre[, seq(m, ncol(pre), by =nvaria)], 1, f)}
 
-nv = 3# number of algorithms.
+nv = 1# number of algorithms.
 cv_traffic= data.frame(sapply(1:nv, F1, tr_hp, mean,nv)) 
-names(cv_traffic) = paste0(c("LA", "RF", "XGB"), "_tr_hp")
+names(cv_traffic) = paste0(c("LA", "RF", "XGB", "INLA"), "_tr_hp")
 
 cv_bg = data.frame(sapply(1:nv, F1, tr_lmp, mean,nv)) 
-names(cv_bg) =  paste0(c("LA", "RF", "XGB"),"_tr_lmp")
+names(cv_bg) =  paste0(c("LA", "RF", "XGB", "INLA"),"_tr_lmp")
 
 cv_far = data.frame(sapply(1:nv, F1, far, mean,nv)) 
-names(cv_far) =  paste0(c("LA", "RF", "XGB"),"_far")
+names(cv_far) =  paste0(c("LA", "RF", "XGB", "INLA"),"_far")
 cbind(cv_traffic, cv_bg, cv_far)
- 
+```
 
 
+```{r}
+
+sp2 = cbind(cv_traffic, cv_bg, cv_far)
+stargazer(t(sp2), summary = F, digits = 2)
+stargazer(t(sp2), summary = F, digits = 1)
 ```
 
 ##### SP3
