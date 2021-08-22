@@ -1,3 +1,4 @@
+
 # tried 
 # ranger quantreg=T     quantile_RF
 # quantregForest        QRF
@@ -7,7 +8,7 @@
 # ALso reduced random forest. The results seem to be better. 
 
 #install.packages("disttree", repos="http://R-Forge.R-project.org")
- 
+
 ipak <- function(pkg){
   
   new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
@@ -23,6 +24,7 @@ library(disttree)
 install_github("mengluchu/APMtools") 
 library(APMtools)
 ls("package:APMtools") 
+
  
 resolution =100 # resolution of grid
 nboot = 12  # number of bootstraps
@@ -188,15 +190,19 @@ for (tree in 1:num.trees){
   rf_90 = t.quant90
   df1 = cbind(data.frame(rf_90), data.frame(dist.q90), rrf_l90,rrf_u90,rrf2_l90,rrf2_u90,id = 1:nrow(data.frame(rf_90)),y_denl_test )
  
-  names(df1) = c("quantile_RF_L90","quantile_RF_U90", "Distribution_RF_L90","Distribution_RF_U90", "reduced_RF_L90","reduced_RF_U90", "reduced2_RF_L90","reduced2_RF_U90","id", "test")
+  names(df1) = c("QRF_L90","QRF_U90", "DF_L90","DF_U90", "QRFLA_L90","QRFLA_U90", "reduced2_RF_L90","reduced2_RF_U90","id", "test")
 # plot
-  df1 = df1%>%  gather(variable, value, -id, -test, -quantile_RF_L90, -quantile_RF_U90, -Distribution_RF_L90, -Distribution_RF_U90)
-
+  df1 = cbind(data.frame(rf_90), data.frame(dist.q90), rrf_l90,rrf_u90,rrf2_l90,rrf2_u90,id = 1:nrow(data.frame(rf_90)),y_denl_test,dres$pred_ll90,dres$pred_ul90 )
+  
+  df1 = df1%>%  gather(variable, value, -id, -test, -DF_L90, -DF_U90, -reduced2_RF_L90,-reduced2_RF_U90)
+  df1 = df1%>%  gather(variable, value, -id, -test,-QRFLA_L90,-QRFLA_U90, -reduced2_RF_L90,-reduced2_RF_U90)
+  
   ggplot(df1)+aes(x = id, y = value, colour = variable)+geom_line()+
     geom_point(aes(y=test), colour= "black")+
   scale_color_brewer(palette="Spectral")+labs(x = "test points", y = "NO2", colour = "prediction intervals")
    #
-  ggsave("dist_vs_qrf_sq.png")
+  ggsave("qrf_df.png")
+  ggsave("qrf_qrfla.png")
  
 plot(rf_90[,1]  ,ylim = c(min(y_denl_test)-1,max(y_denl_test)+1),  typ = "l")
    lines(rf_90[,2])
@@ -244,21 +250,23 @@ mean_reg$predictions
 # INLA
  ################
   # source("~/Documents/GitHub/uncertainty/MLmodeling//INLA/INLA_util.R") 
-source("https://raw.githubusercontent.com/mengluchu/uncertainty/master/MLmodeling//INLA/INLA_util.R")
+source("~/Documents/GitHub/uncertainty/MLmodeling//INLA/INLA_util.R") 
+
+   
+  ##
+  ##
   
-  covnames0 <- c("nightlight_450", "population_1000", "population_3000",
-                 "road_class_1_5000", "road_class_2_100", "road_class_3_300", "trop_mean_filt",
-                 "road_class_3_3000", "road_class_1_100", "road_class_3_100"
-                 , "road_class_3_5000", "road_class_1_300", "road_class_1_500",
-                 "road_class_2_1000", "nightlight_3150", "road_class_2_300", "road_class_3_1000", "temperature_2m_7")
+  d = df
   
-  
-  d <- df[, c("mean_value", "Longitude", "Latitude", covnames0)]
+  covnames = c("nightlight_450", "population_1000", "population_3000",
+               "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
+               "trop_mean_filt", "road_class_1_100")
+  d <- df[, c("mean_value", "Longitude", "Latitude", covnames)]
   
   # covnames0 <- NULL
-  covnames <- c("b0", covnames0)  # covnames is intercept and covnames0
+  covnames <- c("b0", covnames)  # covnames is intercept and covnames0
   
-  d$y <- d$mean_value # response
+  d$y <-d$mean_value # response
   d$coox <- d$Longitude
   d$cooy <- d$Latitude
   d$b0 <- 1 # intercept
@@ -266,20 +274,55 @@ source("https://raw.githubusercontent.com/mengluchu/uncertainty/master/MLmodelin
   dp <- d
   dtraining <- d[training, ]
   dptest <- dp[test, ]
-  # Fit model
-  lres <- fnFitModelINLA(dtraining, dptest, covnames, TFPOSTERIORSAMPLES = FALSE, formulanew = NULL)
-  # Get predictions
-  dptest <- fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
-  coordi = c(mergedall$Longitude, mergedall$Latitude)
-  p <- matrix(coordi, ncol = 2)
-  tr = p[training,] %>%  
-    sf::st_multipoint() 
   
-  te = p[test,] %>% 
-    st_multipoint()
+  formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
   
-  inla_90= cbind(dptest$pred_ll90,dptest$pred_ul90)
-  #plot(inla_90[,1], ylim = c(min(y_denl_test)-1,max(y_denl_test)+1), col = "red", typ = "l")
+  lres = fnFitModelINLA(d= dtraining, dp = dptest, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
+  res = lres[[1]]
+  #res = improved.result
+  stk.full = lres[[2]]
+  mesh = lres[[3]]
+  dres = fnGetPredictions(res, stk.full, mesh, d =dtraining, dp=dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
   
-  p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
-  plot(p)
+  lres = fnFitModelINLA(d= dtraining, dp = dptest, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "Gamma")
+  res = lres[[1]]
+  #res = improved.result
+  stk.full = lres[[2]]
+  mesh = lres[[3]]
+  dres2 = fnGetPredictions(res, stk.full, mesh, d =dtraining, dp=dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+  
+ 
+  # Get predictions. NUMPOSTSAMPLES = -1 calculated with estimation data, 0 with prediction data, 1 with inla.posterior.samples()
+  #  ysim = rnorm(n = nrow(dtest), mean = dres$pred_mean, sd = dres$pred_sd)
+  #plot(ysim, typ = "l")
+  inlacrps = crps(y =dptest$real, family = "norm", mean = dres$pred_mean, sd =dres$pred_sd) 
+# plot(y_denl_test)
+#lines(dres$pred_ul)
+# lines(dres$pred_ll, col = "red")
+ 
+ df1 = data.frame(cbind( dres$pred_ll90, dres$pred_ul90,  dres2$pred_ll90, dres2$pred_ul90, id = 1:nrow(data.frame(rf_90)),y_denl_test ))
+ 
+ names(df1) = c( "INLA_L90", "INLA_U90","INLA-G_L90", "INLA-G_U90","id", "test")
+ # plot
+  
+ df1 = df1%>%  gather(variable, value, -id, -test)
+ 
+ ggplot(df1)+aes(x = id, y = value, colour = variable)+geom_line()+
+   geom_point(aes(y=test), colour= "black")+
+   scale_color_brewer(palette="Set1")+labs(x = "test points", y = "NO2", colour = "prediction intervals")
+ #
+ ggsave("INLA_pred.png")
+ # plot training and test
+ coordi = c(mergedall$Longitude, mergedall$Latitude)
+ p <- matrix(coordi, ncol = 2)
+ tr = p[training,] %>%  
+   sf::st_multipoint() 
+ 
+ te = p[test,] %>% 
+   st_multipoint()
+ 
+ inla_90= cbind(dptest$pred_ll90,dptest$pred_ul90)
+ plot(inla_90[,1], ylim = c(min(y_denl_test)-1,max(y_denl_test)+1), col = "red", typ = "l")
+ 
+ p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
+ plot(p)

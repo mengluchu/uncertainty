@@ -1,3 +1,4 @@
+# functions used in geostatistical modelling in the manuscript
 #install.packages("INLA", repos=c(getOption("repos"), INLA="https://inla.r-inla-download.org/R/stable"), dep=TRUE)
 library(INLA)
 #devtools::install_github("mengluchu/APMtools") 
@@ -226,7 +227,7 @@ fnGetPredictions = function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES
     dres = dp
   }
   return(dres) 
-
+}
 #' get h2o cv results from a h2o model and return a df
 #' @param h2omodel h2omodel
 #' 

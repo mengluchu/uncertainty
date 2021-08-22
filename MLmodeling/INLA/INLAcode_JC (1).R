@@ -293,22 +293,23 @@ INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spa
 # data
 
 d = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
-head(d)
+head(d) 
+d$b0 = 1 # intercept
 d$y = d$mean_value #     # For GAMMA distribution
 d$coox = d$Longitude
 d$cooy = d$Latitude
-d$b0 = 1 # intercept
+
 d$real = d$y
 # Variables for stacked generalization
 # d$lasso = d$lasso10f_pre
 # d$rf = d$rf10f_pre
 # d$xgb = d$xgb10f_pre
-d$Countrycode  = as.factor(d$Countrycode)
+#d$Countrycode  = as.factor(d$Countrycode)
 d$MeasurementType  = as.factor(d$MeasurementType)
 d$AirQualityStationType = as.factor(d$AirQualityStationType)
 d$AirQualityStationArea = as.factor(d$AirQualityStationArea)
 d$urbantype = as.factor(d$urbantype)
-
+d$Countrycode = as.factor(as.numeric(d$Countrycode))
 # Data for prediction
 #dp = d
 
@@ -341,10 +342,28 @@ ggsave("~/Documents/GitHub/uncertainty/histqq_NO2.png",g, height = 6, width = 18
 
 covnames = c("b0", "nightlight_450", "population_1000", "population_3000",
              "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
-             "trop_mean_filt", "road_class_1_100", "urbantype", "Countrycode")
+             "trop_mean_filt", "road_class_1_100")
+# "Countrycode",  "urbantype_chara"
 #, "Countrycode",  "urbantype"
+library(dplyr)
+d2= d%>%dplyr::select(covnames)%>%scale()%>%data.frame
+d2$b0 = 1 # intercept
+d2$y = d$mean_value #     # For GAMMA distribution
+d2$coox = d$Longitude
+d2$cooy = d$Latitude
+
+d2$real = d$y
+head(d2)
+# Variables for stacked generalization
+# d$lasso = d$lasso10f_pre
+# d$rf = d$rf10f_pre
+# d$xgb = d$xgb10f_pre
+#d$Countrycode  = as.factor(d$Countrycode)
 
 formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
+
+formula2 = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+')))
+
 
 #====
 #smp_size = floor(0.2 * nrow(d)) 
@@ -356,8 +375,26 @@ formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(
 #dtest = d[test, ]
 
 #lres = fnFitModelINLA(d= dtrain, dp = dtest, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
+lres <- fnFitModelINLA(d2, dp = d2, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
 
-lres  <- fnFitModelINLA(d, dp = d, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
+lres2 <- fnFitModelINLA(d2, dp = d2, covnames, formula = formula2, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
+lres[[1]]$summary.fixed
+lres2[[1]]$summary.fixed
+(lres[[1]]$summary.fixed- lres2[[1]]$summary.fixed)/(lres[[1]]$summary.fixed+ lres2[[1]]$summary.fixed)
+lres[[1]]$summary.fixed/lres2[[1]]$summary.fixed
+
+par(mfrow=c(2,2))
+# Intercept
+plot(lres[[1]]$marginals.fix[[1]], type='l', xlab=expression(Intercept), ylab="Density", cex.lab=1.6, cex.axis=1.4)
+
+# Precision for Gaussian observations
+plot(lres[[1]]$marginals.hy[[1]], type='l',xlab=expression(tau[y]), ylab="Density", cex.lab=1.6, cex.axis=1.4)
+
+# Marginal for tau of the spatial random field
+plot(lres[[1]]$marginals.hy[[2]], type='l',xlab=expression(tau[x]), ylab="Density", cex.lab=1.6, cex.axis=1.4)
+
+# Marginal for kappa of the spatial random field
+plot(lres[[1]]$marginals.hy[[3]], type='l',xlab=expression(kappa), ylab="Density", cex.lab=1, cex.axis=1)
 
 
 #=========================================
@@ -374,7 +411,7 @@ pred_ul <- lres[[1]]$summary.fitted.values[index.pred, "0.975quant"]
 
 
 summary(lres[[1]])
-lres[[1]]$summary.fixed
+lres2[[1]]$summary.fixed
 lres[[1]]$summary.random
 summary(lres[[1]])
 #==============================
@@ -387,50 +424,21 @@ data_pred = data.frame(pred_mean, pred_ll, pred_ul, lres[[5]][, 1], lres[[5]][, 
 colnames(data_pred) <- c("pred_mean", "pred_ll", "pred_ul", "Longitude", "Latitude")
 
 
-mean_plot <- ggplot(data_pred, aes(Longitude, Latitude)) +
-  geom_point(aes(colour= pred_mean)) +
-  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
-  xlab("") +  ggtitle("Mean prediction") +
-  theme(plot.title = element_text(hjust = 0))+
-  geom_point(aes(colour= pred_mean)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
-
-upper_plot <- ggplot(data_pred, aes(Longitude, Latitude)) +
-  geom_point(aes(colour= pred_ul)) +
-  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
-  xlab("") +  ggtitle("Upper prediction") +
-  theme(plot.title = element_text(hjust = 0))+
-  geom_point(aes(colour= pred_mean)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
-
-lower_plot <- ggplot(data_pred, aes(Longitude, Latitude)) +
-  geom_point(aes(colour= pred_ll)) +
-  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
-  ggtitle("Lower prediction") +
-  theme(plot.title = element_text(hjust = 0))+
-  geom_point(aes(colour= pred_mean)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
-
-#x11()
-library(viridis)
-original <- ggplot(d, aes(Longitude, Latitude)) +
-  geom_point(aes(colour= y)) +
-#  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
-  ggtitle("Observation") +
-  theme(plot.title = element_text(hjust = 0))+ scale_color_gradientn(colours = c(viridis(100, begin = 0.3, end = 0.9),rev( magma(100, begin = 0.3))), limits = c(0,48))+
-  geom_point(aes(colour=y)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
- 
-
-grid.arrange( mean_plot, upper_plot, lower_plot, original,ncol = 1)
 library(tidyverse)
 library(RColorBrewer)
 #difference
 res_dif = data.frame(obs_predmean = d$y- data_pred$pred_mean,   obs_predul = d$y- data_pred$pred_ul, obs_predll = d$y- data_pred$pred_ll,  lat =d$Latitude, lon = d$Longitude)
 gres = gather(res_dif, "key", "value",-lat, -lon)
-ggplot(gres, aes(lon,lat)) +
-  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+
+ggplot(gres, aes(lon,lat)) + 
   ggtitle("Observation - INLA prediction") +
   theme(plot.title = element_text(hjust = 0, size = 10),strip.text.x = element_text(size = 15, colour = "black", angle = 0))+
   geom_point(aes(colour=value)) +facet_wrap(~key)+ 
-  geom_polygon(data = shapefile, colour = "black",aes(x = long, y = lat, group = group), fill = NA) + scale_color_gradientn(colours =brewer.pal(11, "BrBG"))
-ggsave("~/Documents/GitHub/uncertainty/dif_obs_INLA.png",height = 12, width = 20)
+  geom_polygon(data = shapefile, colour = "black",aes(x = long, y = lat, group = group), fill = NA) + 
+  scale_color_gradientn(name = expression(paste(NO[2],~mu, g/m^{3})),
+                        colours = rev(brewer.pal(10,"Spectral")))
+                        
+ggsave("~/Documents/GitHub/uncertainty/dif_obs_INLA.png",height = 6, width = 10)
 
 #library(tidyverse)
 # prediction
@@ -438,14 +446,15 @@ resdf = data.frame(observation =d$y, prediction_mean = data_pred$pred_mean, pred
 
 gres = gather(resdf, "key", "value",-lat, -lon)
 
-ggplot(gres, aes(lon,lat)) +
-  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+ggplot(gres, aes(lon,lat)) + 
   ggtitle("Observation vs. INLA prediction") +
   theme(plot.title = element_text(hjust = 0, size = 10),strip.text.x = element_text(size = 15, colour = "black", angle = 0))+
   geom_point(aes(colour=value)) +facet_wrap(~key)+ 
-  geom_polygon(data = shapefile, colour = "black",aes(x = long, y = lat, group = group), fill = NA) + scale_color_gradientn(colours = c(viridis(100, begin = 0.3, end = 0.9),rev( magma(100, begin = 0.3))), limits = c(0,48))
+  geom_polygon(data = shapefile, colour = "black",aes(x = long, y = lat, group = group), fill = NA) + 
+  scale_color_gradientn(name = expression(paste(NO[2],~mu, g/m^{3})),
+                        colours = c(viridis(100, begin = 0.3, end = 0.9),rev( magma(100, begin = 0.3))), limits = c(0,48))
   
-ggsave("~/Documents/GitHub/uncertainty/pred.png",height = 12, width = 20)
+ggsave("~/Documents/GitHub/uncertainty/pred.png",height = 10, width = 10)
 
 #c(rev(viridis(100, begin = 0.3, end = 0.7)), magma(100, begin = 0.3))
 #scale_color_gradient(low = "#3B9AB2",
@@ -713,7 +722,8 @@ dres = fnGetPredictions(res, stk.full, mesh, d =dtrain, dp=dtest, covnames, NUMP
 ysim = rnorm(n = nrow(dtest), mean = dres$pred_mean, sd = dres$pred_sd)
 plot(ysim, typ = "l")
 inlacrps = crps(y =dtest$real, family = "norm", mean = dres$pred_mean, sd =dres$pred_sd) 
-
+dres$pred_ll90
+dres$pred_ul90
 APMtools::error_matrix(dres$pred_mean, dtest$real)
 
 par(mfrow = c(1,1))
@@ -773,4 +783,36 @@ sim = inla.posterior.sample(N, res)
 s = sim[[1]]$latent
 tail(s[,1], n=3)
 
+#
+mean_plot <- ggplot(data_pred, aes(Longitude, Latitude)) +
+  geom_point(aes(colour= pred_mean)) +
+  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  xlab("") +  ggtitle("Mean prediction") +
+  theme(plot.title = element_text(hjust = 0))+
+  geom_point(aes(colour= pred_mean)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
 
+upper_plot <- ggplot(data_pred, aes(Longitude, Latitude)) +
+  geom_point(aes(colour= pred_ul)) +
+  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  xlab("") +  ggtitle("Upper prediction") +
+  theme(plot.title = element_text(hjust = 0))+
+  geom_point(aes(colour= pred_mean)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
+
+lower_plot <- ggplot(data_pred, aes(Longitude, Latitude)) +
+  geom_point(aes(colour= pred_ll)) +
+  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  ggtitle("Lower prediction") +
+  theme(plot.title = element_text(hjust = 0))+
+  geom_point(aes(colour= pred_mean)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
+
+#x11()
+library(viridis)
+original <- ggplot(d, aes(Longitude, Latitude)) +
+  geom_point(aes(colour= y)) +
+  #  scale_colour_gradient(name = expression(Level~of~NO[2]), low = "yellow", high = "red") + 
+  ggtitle("Observation") +
+  theme(plot.title = element_text(hjust = 0))+ scale_color_gradientn( colours = c(viridis(100, begin = 0.3, end = 0.9),rev( magma(100, begin = 0.3))), limits = c(0,48))+
+  geom_point(aes(colour=y)) +geom_polygon(data = shapefile, aes(x = long, y = lat, group = group), colour = "black", fill = NA)
+
+
+grid.arrange( mean_plot, upper_plot, lower_plot, original,ncol = 1)
