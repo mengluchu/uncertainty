@@ -1,23 +1,37 @@
 rm(list = ls())
-
+# reproduce figures related to distributions and INLA
 #devtools::install_github("mengluchu/APMtools") 
 library(INLA)
-library(APMtools)
+ 
 library(dismo) # for area() inside INLA_crossvali()
-library(caret)
+
+#for prediction interval
 library(scoringRules)
-library(ggpubr)
-library(fastshap)
+
+#for shap
+library("fastshap")
+
+# for table manipulation
 library(dplyr)
 library(tidyverse)
+library(ggpubr)
+
+#for plotting
 library(RColorBrewer)
 library(leaflet)
 library(gridExtra)
 library(rgdal)
+
+library(caret)
+
+library(goft) # for gamma test
+
 library(devtools)
 install_github("mengluchu/APMtools") 
 library(APMtools)
 ls("package:APMtools") 
+
+# INLA FUNCTIONS
 #' Creates triangulated mesh to fit a spatial model using INLA and SPDE
 #' 
 #' @param coo coordinates to create the mesh
@@ -302,7 +316,7 @@ INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spa
 
 
 # data
-
+shapefile <- readOGR(dsn = "~/Documents/GitHub/uncertainty/shapefiles/", layer = "shape2")
 d = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
 head(d) 
 d$b0 = 1 # intercept
@@ -327,7 +341,7 @@ d$Countrycode = as.factor(as.numeric(d$Countrycode))
 #============================================
 
 shapiro.test(d$y)
-gamma_test(d$y)
+gamma_test(d$y) #goft
 hist = ggplot(d, aes(x=y))+xlab( expression(NO[2]~(~mu~g/m^3))) + 
   geom_histogram(binwidth = 1, aes(y=..density..), colour="black", fill="white")+geom_density(alpha=.1, fill="#FF6666") 
 
@@ -341,12 +355,15 @@ original
 #ggsave("~/Documents/GitHub/uncertainty/histogram_NO2.png")
 qq=ggqqplot(d$y)
 #ggsave("~/Documents/GitHub/uncertainty/ggplot_NO2.png")
-ggplot()+geom_histogram(data.frame(d$y))
+ggplot(d, aes(y))+geom_histogram()
 
 g=grid.arrange(original, hist,qq, ncol = 3)
 #ggsave("~/Documents/GitHub/uncertainty/histqq_NO2.png",g, height = 6, width = 18)
 #p-value < 0.05 implying that the distribution of the data are significantly different from normal distribution. 
 
+####################
+# INLA
+############
 covnames = c("b0", "nightlight_450", "population_1000", "population_3000",
              "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
              "trop_mean_filt", "road_class_1_100")
@@ -375,7 +392,7 @@ lres2 <- fnFitModelINLA(d2, dp = d2, covnames, formula = formula2, TFPOSTERIORSA
 
 
 #==========================================
-# spatial and non-spatial INLA model comparison, figure 3 and 4 manuscript
+# spatial and non-spatial INLA model comparison, figure 3 and 4 supplementary
 #============================================
 lres[[1]]$summary.fixed
 lres2[[1]]$summary.fixed
@@ -416,7 +433,7 @@ pred_ul <- lres[[1]]$summary.fitted.values[index.pred, "0.975quant"]
 #==============================
 
 
-shapefile <- readOGR(dsn = "/Users/menglu/Documents/GitHub/uncertainty/shapefiles/", layer = "shape2")
+
 data_pred = data.frame(pred_mean, pred_ll, pred_ul, lres[[5]][, 1], lres[[5]][, 2])
 colnames(data_pred) <- c("pred_mean", "pred_ll", "pred_ul", "Longitude", "Latitude")
 
@@ -459,7 +476,7 @@ ggplot(gres, aes(lon,lat)) +
 
 #c(rev(viridis(100, begin = 0.3, end = 0.7)), magma(100, begin = 0.3))
 #scale_color_gradient(low = "#3B9AB2",
-high = "#EBCC2A", limits=c(15, 35))
+#high = "#EBCC2A", limits=c(15, 35))
 #scale_fill_gradient()
 #  scale_fill_continuous(type = "viridis")
 #  scale_color_gradientn(colours = wes_palette("Zissou1"), values =c(0,0.1,0.2,0.3,0.4,0.5,0.7,0.8,0,9), breaks=c(10, 15,20,25,30,45,60))

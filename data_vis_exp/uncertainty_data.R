@@ -19,6 +19,7 @@ mapviewOptions(
   , viewer.suppress = TRUE # open browser
 )
 
+#already new data, for the mobi mapping study
 merged = read.csv("~/Documents/GitHub/Global mapping/glo4variables.csv")
 EUmeta = read.csv("~/Downloads/non_backups/global_mapping_data/PanEuropean_metadata.csv")
 merged = read.csv("~/Documents/GitHub/Global mapping/glo_hr.csv")
@@ -29,7 +30,7 @@ EU = merge(merged, EUmeta, by=c("Longitude", "Latitude"), all.x =T)
 EU = EU%>%filter(!is.na(Countrycode))
 EU%>%filter(Countrycode=="DE"|Countrycode=="NL")%>%select(-X) # with X (index) we cant do spread
 }
-#EU 
+#EU
 #locations_sf = st_as_sf(EU, coords = c("Longitude","Latitude"), crs=4642)
  # https://leaflet-extras.github.io/leaflet-providers/preview/
 #mapview(locations_sf)
@@ -38,16 +39,16 @@ EU%>%filter(Countrycode=="DE"|Countrycode=="NL")%>%select(-X) # with X (index) w
 
 
 DENL_2017 = selectcountry(merged, EUmeta )
-DENL_2017spread = spread(DENL_2017, hours, wkd_hr_value) 
+DENL_2017spread = spread(DENL_2017, hours, wkd_hr_value)
 
- 
+
 write.csv(DENL_2017spread,"/Users/menglu/Documents/GitHub/mobiair/DENL17_hr_spread.csv")
 
 
 
 #write.csv(DENL_2017,"/Users/menglu/Documents/GitHub/DENL17_uc.csv")
- 
-# two records with missing values in predictors are removed 
+
+# two records with missing values in predictors are removed
 DENL_2017=DENL_2017%>%filter(DENL_2017!=-10000)
 locations_sf = st_as_sf(DENL_2017, coords = c("Longitude","Latitude"), crs=4642)
 mapview(locations_sf)
@@ -57,14 +58,14 @@ library(raster)
 library(dplyr)
 library(ranger)
 library(APMtools)
-data(global_annual) 
+data(global_annual)
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
 names(mergedall)
 gr = raster("~/Downloads/s5p2019_handpoly.tif")
 gr1 = raster("~/Downloads/s5p2019_handpoly_aug_dec.tif")
-g = list.files("/Volumes/Meng_Mac/S5p/", full.names = T) 
+g = list.files("/Volumes/Meng_Mac/S5p/", full.names = T)
 
- 
+
 
 for ( i in g)
 {
@@ -86,10 +87,10 @@ r
 sort(r$variable.importance, decreasing = T)
 getwd()
 
- 
+
 write.csv(merged, "~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_S5p_uc.csv")
  cor(merged)
- 
+
 
 
 

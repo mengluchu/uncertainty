@@ -36,10 +36,14 @@ prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
 varstring = paste(prestring,y_var,sep="|")
 ```
 
-Prepare the dataset for modeling 
+Prepare the dataset for modeling， removed stations with more than 25% of missing values
 
 ```{r}
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+
+load("~/Documents/GitHub/uncertainty/missingstation.rda") #msname
+mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
+
 
 if (resolution ==100)
 {
@@ -197,13 +201,13 @@ Bootstrapped cross-validation
 
 XGB
 ```{r xgb, eval=T}
-xgb_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial",coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+xgb_crossvali =  function(n,df, y_var,typecrossvali =  "non-spatial" ,coordi = c(mergedall$Longitude, mergedall$Latitude)) {
   smp_size = floor(0.2* nrow(df)) 
   set.seed(n)
-  if(typecrossvali == "crossvalinotspatial"){
+  if(typecrossvali == "non-spatial"){
     test<- sample(seq_len(nrow(df)), size = smp_size)
   }
-  if(typecrossvali == "crossvalispatial"){
+  if(typecrossvali == "spatial"){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
     # We use locations of a spatially representative sample of the prediction surface
     # To obtain a valid data set, X% of the observations are sampled without replacement where
@@ -228,13 +232,13 @@ V2
 RF
 
 ```{r, eval = T}
-rf_crossvali =  function(n,df, y_var, coordi = c(mergedall$Longitude, mergedall$Latitude), typecrossvali = "crossvalinotspatial") {
+rf_crossvali =  function(n,df, y_var, coordi = c(mergedall$Longitude, mergedall$Latitude), typecrossvali =  "non-spatial" ) {
   smp_size <- floor(0.2 * nrow(df)) 
   set.seed(n)
-  if(typecrossvali == "crossvalinotspatial"){
+  if(typecrossvali == "non-spatial"){
     test <- sample(seq_len(nrow(df)), size = smp_size)
   }
-  if(typecrossvali == "crossvalispatial"){
+  if(typecrossvali == "spatial"){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
     # We use locations of a spatially representative sample of the prediction surface
     # To obtain a valid data set, X% of the observations are sampled without replacement where
@@ -259,13 +263,13 @@ Vrf
 ```
 LA
 ```{r, eval=T}
-LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+LA_crossvali =  function(n,df, y_var,typecrossvali = "non-spatial" , coordi = c(mergedall$Longitude, mergedall$Latitude)) {
   smp_size <- floor(0.2 * nrow(df)) 
   set.seed(n)
-  if(typecrossvali == "crossvalinotspatial"){
+  if(typecrossvali == "non-spatial"){
     test <- sample(seq_len(nrow(df)), size = smp_size)
   }
-  if(typecrossvali == "crossvalispatial"){
+  if(typecrossvali == "spatial"){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
     # We use locations of a spatially representative sample of the prediction surface
     # To obtain a valid data set, X% of the observations are sampled without replacement where
@@ -302,13 +306,13 @@ LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", coor
 ```
 quantiel RF to look at coverage probability.
 ```{r}
-q_rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+q_rf_crossvali =  function(n,df, y_var,typecrossvali =  "non-spatial" , coordi = c(mergedall$Longitude, mergedall$Latitude)) {
   smp_size <- floor(0.2* nrow(df)) 
   set.seed(n)
-   if(typecrossvali == "crossvalinotspatial"){
+   if(typecrossvali == "non-spatial"){
     test <- sample(seq_len(nrow(df)), size = smp_size)
   }
-  if(typecrossvali == "crossvalispatial"){
+  if(typecrossvali == "spatial"){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
     # We use locations of a spatially representative sample of the prediction surface
     # To obtain a valid data set, X% of the observations are sampled without replacement where
@@ -328,13 +332,13 @@ qrf = lapply(1:nboot, df = merged, y_var = y_var, q_rf_crossvali )
 QRFLA
 ```{r}
  
-rf_la_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+rf_la_crossvali =  function(n,df, y_var,typecrossvali = "non-spatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
   smp_size <- floor(0.2* nrow(df)) 
   set.seed(n)
-   if(typecrossvali == "crossvalinotspatial"){
+   if(typecrossvali == "non-spatial"){
     test <- sample(seq_len(nrow(df)), size = smp_size)
   }
-  if(typecrossvali == "crossvalispatial"){
+  if(typecrossvali == "spatial"){
     # The validation data needs to spatially represent the whole region where the prevalence is predicted
     # We use locations of a spatially representative sample of the prediction surface
     # To obtain a valid data set, X% of the observations are sampled without replacement where
@@ -355,7 +359,7 @@ rfla
 ```
 
 ```{r, eval=F}
-df = data.frame(Lasso = VLA,RF = Vrf, XGB = V2 , RF_Lasso = rfla)
+df = data.frame(Lasso = VLA, RF = Vrf, XGB = V2 , RF_Lasso = rfla[1:8,])
 stargazer(df,summary = F, digits = 2)
 ```
 
@@ -398,7 +402,7 @@ APMtools::error_matrix (validation = y_test, prediction = xgb_pre)
 
 rg = lapply(1:nboot, df = merged, y_var = y_var, xgbgamma_cv  )
 rg2 = data.frame(XGB_GAMMA = rowMeans(data.frame(rg)))
-rg2#gamma
+rg2 #gamma
 ```
 
 ```{r resulttable}

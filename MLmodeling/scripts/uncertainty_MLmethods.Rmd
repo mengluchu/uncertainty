@@ -1,0 +1,1106 @@
+---
+title: "cross validation"
+output:
+  html_document:
+    df_print: paged
+---
+ 
+Questions:
+1. effects of normalising predictors
+2. effects of loss distributions
+3. improvement of using rf_lasso
+4. 
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path=paste0('global_crossvali',"/"),
+                      echo=F, warning=FALSE, message=FALSE, dev = "png", include = T)
+```
+ 
+Required packages
+```{r, include=F}
+ipak <- function(pkg){
+ 
+   new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+   if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE , repos='http://cran.muenster.r-project.org')
+  sapply(pkg, require, character.only = TRUE)
+}
+packages <- c( "devtools", "dplyr","data.table" , "ggplot2" , "RColorBrewer", "xgboost",  "glmnet", "ranger", "randomForest","tidyr" ,"tibble","stargazer", "sf", "CAST", "caret", "quantregForest", "pdp", "h2o", "dismo","scoringRules")
+ipak(packages)
+install_github("mengluchu/APMtools") 
+library(APMtools)
+ls("package:APMtools") 
+
+```
+
+```{r, eval=FALSE}
+packages <- c("glmnet",  "stargazer",   "CAST",   "quantregForest",   "h2o", "dismo","scoringRules")
+install.packages(packages)
+```
+
+Variables used:
+```{r}
+resolution =100 # resolution of grid
+nboot = 20  # number of bootstraps
+y_var = "mean_value"
+prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
+varstring = paste(prestring,y_var,sep="|")
+```
+
+Prepare the dataset for modeling 
+```{r}
+mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv") #482
+```
+
+```{r}
+load("~/Documents/GitHub/uncertainty/missingstation.rda") #msname
+mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
+
+```
+
+Remove stations with less than 25% of the records, there are 8 in Germany, non in the Netherlands (one with 25.4% but we included it).  The 8 stations in Germany have missing values 50% and more. Four rural and 4 urban. 
+```{r rm, eval = FALSE}
+
+DENL_hr = fread("~/Documents/GitHub/gwr_hr/denl_hourly.csv")
+DENL_hr = DENL_hr%>%filter(Countrycode=="DE")
+d = pivot_wider(DENL_hr, names_from = AirQualityStation, values_from = value_g)
+cna =function(x)
+  {x = unlist(x)
+  sum(is.na(x))/ length(x)}
+
+nl = sapply(d, cna) #    Min.  1st Qu.   Median     Mean  3rd Qu.     Max.
+#0.000000 0.009075 0.019064 0.027385 0.027568 0.253767
+ 
+nl[which(nl > 0.25)]
+#STA.DE_DEHE135 STA.DE_DEHH049 STA.DE_DENW381 STA.DE_DENW382 STA.DE_DESH028
+#0.5851598      0.9170091      0.7307078      0.7947489      0.8373288
+#STA.DE_DESH033 STA.DE_DESH057 STA.DE_DESL018
+#0.5325342      0.4848174      0.8373288
+save(nl, "~/Documents/GitHub/uncertainty/data_vis_exp/missing_percentage.rda")
+mergedall =mergedall%>%filter(AirQualityStation %in% names(which(nl > 0.25)))
+
+```
+
+```{r}
+if (resolution ==100)
+{
+  mergedall = mergedall%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
+}  
+
+merged = mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
+ 
+ 
+names(merged)
+```  
+
+Data summary
+```{r, eval=FALSE} 
+mergedall$AirQualityStationArea%>%table
+mergedall$AirQualityStationType%>%table
+ 
+mergedall%>%filter(AirQualityStationType=="traffic")%>%dplyr::select(wkd_day_value)%>%summary
+mergedall%>%filter(AirQualityStationType=="traffic")%>%dplyr::select(wkd_night_value)%>%summary
+mergedall%>%filter(AirQualityStationType=="background")%>%dplyr::select(wkd_day_value)%>%summary
+mergedall%>%filter(AirQualityStationType=="background")%>%dplyr::select(wkd_night_value)%>%summary
+```
+ 
+
+
+
+Use H2o for kfold CV and get predictions.
+Initialize h2o, requires Java and JDK to be installed. This part see colde INLA_stack
+```{r, eval=FALSE}
+h2o.init()
+
+x_var = setdiff(names(merged), y_var)
+merged_hex = as.h2o(merged)
+rf = h2o.randomForest(y = y_var, x= x_var, training_frame = merged_hex, ntrees =1000,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
+
+# CV
+xgb = h2o.xgboost(y = y_var, x= x_var, training_frame = merged_hex, nfolds =10, ,ntrees =3000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, keep_cross_validation_predictions = T, seed =1 )
+ 
+las = h2o.glm(y = y_var, x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =10, keep_cross_validation_predictions = T, seed =1 )
+
+ensemble = h2o.stackedEnsemble(y = y_var, x= x_var, training_frame = merged_hex, base_models = c(rf, xgbl, las))
+
+get_h2o_pred = function(h2omodel) 
+{
+ cvpreds_id  = h2omodel@model$cross_validation_holdout_predictions_frame_id$name
+ as.data.frame(h2o.getFrame(cvpreds_id))$predict
+ }
+ 
+ 
+rf10f_pre =get_h2o_pred(rf)
+xgb10f_pre =get_h2o_pred(xgb)
+lasso10f_pre =get_h2o_pred(las)  
+
+h2o.removeAll()
+# model and predict on all the data
+
+rf_all = h2o.randomForest(y = y_var, x= x_var, training_frame = merged_hex, ntrees =1000, seed =1 )
+
+rf_all_pre = as.data.frame(h2o.predict(object = rf_all, newdata = merged_hex))$predict 
+
+xgb_all = h2o.xgboost(y = y_var, x= x_var, training_frame = merged_hex ,ntrees =3000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, seed =1 )
+
+xgb_all_pre = as.data.frame(h2o.predict(object = xgb_all, newdata = merged_hex))$predict 
+  
+las_all = h2o.glm(y = y_var, x= x_var, training_frame = merged_hex, alpha = 1,   seed=1 )
+
+lasso_all_pre = as.data.frame(h2o.predict(object = las_all, newdata = merged_hex))$predict 
+h2o.removeAll()
+# check
+cor(rf10f_pre,xgb10f_pre)
+cor(xgb10f_pre,lasso10f_pre)
+plot(mergedall$mean_value, lasso10f_pre)
+plot(xgb10f_pre,xgb_all_pre)
+
+```
+Add predictions to the csv file (as requested by collaborator)
+```{r, eval = F}
+addpre = cbind(mergedall,rf10f_pre,xgb10f_pre,lasso10f_pre,rf_all_pre,xgb_all_pre,lasso_all_pre)
+write.csv(addpre, "~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_uc.csv")
+```
+
+Sf object of data, for visualization and spatial cross-validation
+```{r}
+locations_sf = st_as_sf(mergedall, coords = c("Longitude","Latitude"), crs=4642)
+```
+
+Variable importance of LA
+```{r, eval  = F}
+LA_imp =  function(n,df, y_var) {
+  smp_size <- floor(0.8 * nrow(df)) 
+  set.seed(n)
+  training<- sample(seq_len(nrow(df)), size = smp_size)
+   
+  y_varname= y_var
+  grepstring =varstring
+  variabledf = df
+  prenres = paste(y_varname, "|", grepstring, sep = "")
+  pre_mat_all = subset_grep(variabledf, prenres)
+  pre_mat = pre_mat_all %>% dplyr::select(-y_varname)
+  pre_mat_tr = pre_mat[training, ]
+  y_tr_value = variabledf[training, y_varname] 
+  cvfit <- glmnet::cv.glmnet(as.matrix(pre_mat_tr), y_tr_value, 
+        type.measure = "mse", standardize = TRUE, alpha = 1, 
+        lower.limit = 0)
+    
+  Lassoselected(cvfit)
+} 
+  VLA = sapply(1:nboot, df = merged,   y_var = y_var, LA_imp)
+ 
+  a= table(do.call(c,VLA))  
+  #a =a[a>=5]  
+  a = a[order(a,decreasing = T)]
+  stargazer(data.frame(a),summary = F)
+```
+ 
+Variable importance of ML methods: 20-times bootstrapping
+```{r, eval=F}
+Impor_val =  function(n,df, method , y_var  ) {
+
+  set.seed(n)
+  smp_size <- floor(0.8 * nrow(df))
+
+training<- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+ 
+ 
+methodID = switch(method,  "xboost"=1,"rf" =2 ) 
+
+df = switch(methodID,  
+            xgboost_imp (variabledf= df, y_varname= y_var, max_depth =6, gamma=5, eta =0.007, nrounds = 3000, training=training, test=test, grepstring =varstring, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7),  
+            rf_imp(df, y_varname= y_var, training=training, test=test, grepstring =varstring,mtry = NULL, numtrees = 1000) 
+) 
+return(df)
+} 
+ Vxb = data.frame(lapply(1:20, Impor_val, df= merged, "xboost" , y_var =y_var))
+ Vrf = data.frame(lapply(1:20, Impor_val, df = merged, "rf" , y_var = y_var)) 
+
+mimpVrf = apply(Vrf, 1, median)
+mimpxb = apply(Vxb, 1, median)
+ 
+ 
+xb = names(mimpxb[order(mimpxb,decreasing = T)]  )[1:20]
+rf = names(mimpVrf[order(mimpVrf,decreasing = T)] ) [1:20]
+vimp=cbind(rank = 1:nboot, xgboost = xb, randomforest = rf)
+#install.packages("stargazer")
+ 
+stargazer(vimp)
+```
+
+
+
+Bootstrapped cross-validation 
+```{r xgb, eval=T}
+xgb_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial",coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+  smp_size = floor(0.2* nrow(df)) 
+  set.seed(n)
+  if(typecrossvali == "crossvalinotspatial"){
+    test<- sample(seq_len(nrow(df)), size = smp_size)
+  }
+  if(typecrossvali == "crossvalispatial"){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+    p <- matrix(coordi, ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    prob_selection <- area(v)/sum(area(v))
+   test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = T)
+  }
+  training = seq_len(nrow(df))[-test] 
+  
+  xgboost_LUR(df, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds =1000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7 )
+} 
+
+
+V2 = lapply(1:nboot, df = merged, y_var = y_var,xgb_crossvali)
+V2 = data.frame(XGB = rowMeans(data.frame(V2)))
+V2
+```
+ 
+```{r, eval = T}
+rf_crossvali =  function(n,df, y_var, coordi = c(mergedall$Longitude, mergedall$Latitude), typecrossvali = "crossvalinotspatial") {
+  smp_size <- floor(0.2 * nrow(df)) 
+  set.seed(n)
+  if(typecrossvali == "crossvalinotspatial"){
+    test <- sample(seq_len(nrow(df)), size = smp_size)
+  }
+  if(typecrossvali == "crossvalispatial"){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+     
+    p <- matrix(coordi, ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    prob_selection <- area(v)/sum(area(v))
+    test<- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = T)
+  }
+  training = seq_len(nrow(df))[-test] 
+  rf_LUR(df, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+} 
+
+ 
+Vrf = lapply(1:nboot, df = merged, y_var = y_var,rf_crossvali)
+Vrf = data.frame(RF = rowMeans(data.frame(Vrf)))
+Vrf
+
+#server: combine
+```
+
+```{r, eval=T}
+LA_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+  smp_size <- floor(0.2 * nrow(df)) 
+  set.seed(n)
+  if(typecrossvali == "crossvalinotspatial"){
+    test <- sample(seq_len(nrow(df)), size = smp_size)
+  }
+  if(typecrossvali == "crossvalispatial"){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+    p <- matrix(c(coordi), ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    
+    prob_selection <- area(v)/sum(area(v))
+    hist(prob_selection, n=500)
+    test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = T)
+    tr = p[training,] %>%  sf::st_multipoint() 
+    te = p[test,] %>% sf::st_multipoint()
+  
+  #p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
+  #plot(p)
+  }
+ 
+  #plot(v)
+  training = seq_len(nrow(df))[-test] 
+  
+ 
+  
+  #p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
+  #plot(p)
+  Lasso(df, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
+  
+  
+} 
+  VLA = lapply(1:nboot, df = merged, y_var = y_var, LA_crossvali)
+
+  VLA = data.frame(LA = rowMeans(data.frame(VLA)))
+  VLA
+```
+quantiel RF to look at coverage probability, more detailed analysis see 'PI.R'
+```{r}
+q_rf_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+  smp_size <- floor(0.2* nrow(df)) 
+  set.seed(n)
+   if(typecrossvali == "crossvalinotspatial"){
+    test <- sample(seq_len(nrow(df)), size = smp_size)
+  }
+  if(typecrossvali == "crossvalispatial"){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+    p <- matrix(coordi, ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    prob_selection <- area(v)/sum(area(v))
+    test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
+  }
+training = seq_len(nrow(df))[-test] 
+  q_rf_LUR(df, numtrees =  2000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =varstring)} 
+qrf = lapply(1:nboot, df = merged, y_var = y_var, q_rf_crossvali )
+ qrf = data.frame(QRF = rowMeans(data.frame(qrf)))
+ qrf
+```
+ 
+```{r}
+ 
+rf_la_crossvali =  function(n,df, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+  smp_size <- floor(0.2* nrow(df)) 
+  set.seed(n)
+   if(typecrossvali == "crossvalinotspatial"){
+    test <- sample(seq_len(nrow(df)), size = smp_size)
+  }
+  if(typecrossvali == "crossvalispatial"){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+    p <- matrix(coordi, ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    prob_selection <- area(v)/sum(area(v))
+    test <- sample(seq_len(nrow(df)), size = smp_size, prob = prob_selection, replace = FALSE)
+  }
+ 
+training = seq_len(nrow(df))[-test] 
+result = rf_Lasso_LUR(df, numtrees =  3000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =prestring)
+} 
+rfla= lapply(1:nboot, df = merged, y_var = y_var,rf_la_crossvali )
+rfla = data.frame(RFLA = rowMeans(data.frame(rfla)))
+rfla
+```
+
+```{r, eval=F}
+df = data.frame(Lasso = VLA,RF = Vrf, XGB = V2 , RF_Lasso = rfla)
+stargazer(df,summary = F, digits = 2)
+```
+
+Loss distribution is gamma 
+```{r}
+#n = 1 
+#33df = merged 
+xgbgamma_cv = function(n,df, y_var){
+h2o.init()
+ 
+set.seed(n)
+ 
+smp_size <- floor(0.2 * nrow(df)) 
+  
+test <- sample(seq_len(nrow(df)), size = smp_size)
+training = seq_len(nrow(df))[-test] 
+  
+x_var = setdiff(names(merged), y_var) # predictor names
+ 
+train_xy = df[training,]
+test_xy = df[test,]
+y_train = train_xy[, y_var]
+y_test = test_xy[, y_var]
+x_train = train_xy%>%dplyr::select(x_var)
+x_test = test_xy%>%dplyr::select(x_var)
+
+train_hex = as.h2o(train_xy)
+test_hex = as.h2o(test_xy)
+  
+
+# model and predict on all the data
+
+
+xgb  = h2o.xgboost(y = y_var, x= x_var, training_frame = train_hex ,ntrees = 1000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, seed =1, distribution = "gamma" )
+
+xgb_pre = as.data.frame(h2o.predict(object = xgb, newdata = test_hex))$predict 
+h2o.removeAll()
+APMtools::error_matrix (validation = y_test, prediction = xgb_pre)
+}
+
+rg = lapply(1:nboot, df = merged, y_var = y_var, xgbgamma_cv  )
+rg2 = data.frame(XGB_GAMMA = rowMeans(data.frame(rg)))
+rg2#gamma
+
+df = data.frame(Lasso = VLA,RF = Vrf, XGB = V2, XGB_Gamma =rg2, RF_Lasso = rfla[1:8,])
+stargazer(df,summary = F, digits = 2)
+```
+```{r}
+h2o.removeAll()
+```
+
+
+ 
+ 
+#### Spatial cross-validation
+Sp1 is purely spatial, sp2 and sp3 more specific for air quality, based on the local environment of ground stations. sp2 is easily applicable to the grid. sp3 depends on how to define e.g. traffic vs. background. 
+
+- sp1: blocked cv.
+- sp2: based on customized predictors (e.g. road_class_2_25>0 && population >1000)
+- sp3: based on known attribute e.g. AirqualityStationtypes
+  - AirqualityStationtypes: traffic, background, industrial
+  - human settlement types: urban or rurual  
+
+##### Sp1
+
+Creating grid and add a column of cell id to dataframe 
+```{r creatgrid}
+grid1 = st_make_grid(locations_sf, 2) # 64 grids #20 grids
+grid1%>%plot  
+stc = st_join(st_sf(grid1), locations_sf,join=st_intersects )
+stc$grp = sapply(st_equals(stc), max)
+
+
+merged2 = na.omit(stc%>%dplyr::select(c(colnames(merged), grp)))
+merged2$grp%>%unique()
+
+```
+
+Train using h2o is more convenient than caret and CAST to quickly create index for it,which applys caret createFolds
+
+```{r, eval= F}
+indices = CreateSpacetimeFolds(merged2,
+  spacevar = "grp",
+  timevar = NA,
+  k = 10,
+  class = NA,
+  seed = 1
+ 
+rfGrid <-  expand.grid( mtry =20 )
+merged3 = merged2%>%dplyr::select(c(colnames(merged)))
+merged
+st_geometry(merged3) <- NULL
+predic = merged3%>%dplyr::select(-y_var)
+model_LLO = train(predic, merged3[,y_var],
+                   method="rf", ntree = 2000, importance=TRUE,
+                   trControl=trainControl(method="cv",
+                                          index = indices$index),
+                    tuneGrid = rfGrid)
+
+model_LLO$results
+
+# RMSE 7.252046	R2 0.6617782	 MAE 5.327708	 
+```
+```{r}
+m20 = data.frame(merged2)%>%dplyr::select(c(colnames(merged), 'grp'))%>%mutate(grp = as.factor(grp))
+m2 = as.h2o(m20)
+names(m2)
+```
+
+```{r}
+
+
+xgb  = h2o.xgboost(training_frame = m2,y = "mean_value",ntrees = 1000, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, seed =1, fold_column="grp", keep_cross_validation_fold_assignment= TRUE,)
+xgb # 7.286278
+xgbcv = xgb@model$cross_validation_metrics_summary%>%as.data.frame()%>%dplyr::select(-sd, -mean) 
+xgbcv = apply(t(xgbcv), 2, as.numeric)
+plot(xgbcv[,4], ylim = c(0,1), typ = "l")
+h2o.removeAll()
+```
+
+```{r}
+
+
+rf  = h2o.randomForest(training_frame = m2,y = "mean_value",ntrees = 1000, seed =1, fold_column="grp", keep_cross_validation_fold_assignment= TRUE)
+
+```
+```{r}
+rf #  7.5， oob 7.2
+h2o.removeAll()
+
+
+```
+ 
+```{r}
+library("mapview")
+library("RColorBrewer")
+ 
+plotspcv = function(obj){
+xgbcv = obg@model$cross_validation_metrics_summary%>%as.data.frame()%>%dplyr::select(-sd, -mean) 
+xgbcv = apply(t(xgbcv), 2, as.numeric)
+#plot(xgbcv[,4], ylim = c(0,1), typ = "l")
+#data.frame(xgbcv,h2o.cross_validation_fold_assignment(xgb))
+#h2o.cross_validation_fold_assignment(xgb) 
+m3 = distinct(merged2)
+m3$r2 = ifelse(xgbcv[,4]<0, 0, xgbcv[,4] )
+
+m3$rmse= xgbcv[,6]
+
+#data.frame(xgbcv,h2o.cross_validation_fold_assignment(xgb))
+#h2o.cross_validation_fold_assignment(xgb) 
+m3 = distinct(merged2)
+m3$r2 = ifelse(xgbcv[,4]<0, 0, xgbcv[,4] )
+
+m3$rmse= xgbcv[,6]
+  
+mapviewOptions(
+  basemaps = c("OpenStreetMap.Mapnik","Esri.OceanBasemap")
+  , raster.palette = colorRampPalette(rev(brewer.pal(9, "PiYG")))
+  , vector.palette = colorRampPalette(brewer.pal(9, "PuBuGn"))
+  , na.color = "gray"
+  , layers.control.pos = "topright"
+  , viewer.suppress = TRUE # open browser
+)
+
+ 
+mapview(m3['r2'],layer.name= "R2",col.regions =rev(brewer.pal(11, "PiYG")), at = seq(0, 0.8, 0.1)) + mapview(locations_sf["urbantype_chara"],col.regions = c(brewer.pal(3, "Paired")[2],brewer.pal(3, "Accent")[1:2],brewer.pal(3, "Dark2")[1]), layer.name= "NO2", cex = 4)
+
+ 
+mapview(m3['r2'],layer.name= "RMSE",col.regions =rev(brewer.pal(11, "PiYG")), at = seq(0, 0.8, 0.1)) + mapview(locations_sf["urbantype_chara"],col.regions = c(brewer.pal(3, "Paired")[2],brewer.pal(3, "Accent")[1:2],brewer.pal(3, "Dark2")[1]), layer.name= "NO2", cex = 4)
+}
+plotspcv(rf)
+
+```
+ 
+
+
+```{r}
+INLA_crossvali2 =  function(n, test, training, d, dp, formula, covnames, typecrossvali = "non-spatial", family = "gaussian"){
+ 
+  dtraining = d[training, ]
+  dptest = dp[test, ]
+  
+  # INI CODE MENG
+  # Add to d[, training] 3 variables with names lasso, rf, xgb that are predictions at locations coox and cooy calculated using cross-validation with the dataset d[, training]
+  #dtraining = fnMLPredictionsCV(d[, training])
+  # Add to dp[test, ] 3 variables with names lasso, rf, xgb that are predictions at locations coox and cooy calculated using all data in d[, training]
+  #dptest = fnMLPredictionsAll(dp[, test])
+  # END CODE MENG
+  
+  
+  # Fit model
+  if(family == "gaussian"){
+  lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
+  }
+  if(family == "Gamma"){
+    lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "Gamma")
+    }
+  if(family == "lognormal"){
+    lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "lognormal")}
+  # Get predictions
+  dptest = fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+  # Goodness of fit
+  val = APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
+  val = c(val, cor = cor(dptest$real, dptest$pred_mean))
+  inlacrps = crps(y =dptest$real, family = "norm", mean = dptest$pred_mean, sd =dptest$pred_sd) 
+   
+  
+  (val = c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
+            covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
+            covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50),
+             meancrps = mean(inlacrps),
+           mediancrps = median(inlacrps)))
+  return(val)
+} 
+
+d = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+head(d)
+d$y = d$mean_value #     # For GAMMA distribution
+d$coox = d$Longitude
+d$cooy = d$Latitude
+d$b0 = 1 # intercept
+d$real = d$y
+# Variables for stacked generalization
+# d$lasso = d$lasso10f_pre
+# d$rf = d$rf10f_pre
+# d$xgb = d$xgb10f_pre
+d$Countrycode  = as.factor(d$Countrycode)
+d$MeasurementType  = as.factor(d$MeasurementType)
+d$AirQualityStationType = as.factor(d$AirQualityStationType)
+d$AirQualityStationArea = as.factor(d$AirQualityStationArea)
+d$urbantype = as.factor(d$urbantype)
+
+# Data for prediction
+#dp = d
+
+covnames = c("b0", "nightlight_450", "population_1000", "population_3000", 
+             "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
+             "trop_mean_filt", "road_class_1_100")
+
+#, "Countrycode",  "urbantype"
+
+formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
+
+```
+ 
+#### SP2 customized
+- "tr_hp": close to roads, high population
+- "tr_mlp": close to roads, middle-low population 
+- "f": far away from roads 
+```{r}
+
+
+sp2_cv =  function(n, df_type= c("tr_hp", "tr_mlp", "f") , df_model, y_var) {
+   
+set.seed(n)
+a= df_model%>%filter((road_class_2_100 > 0 | road_class_1_100 > 0|road_class_3_100>quantile(road_class_3_100, .75)) & population_1000 > quantile(population_1000, 0.75))  
+#traffic_lmpop 
+b= df_model%>%filter((road_class_2_100 > 0 | road_class_1_100 > 0 |road_class_3_100 > quantile(road_class_3_100, .75)) & population_1000 < quantile(population_1000, 0.5))   
+ 
+#fartr_highpop
+c= df_model%>%filter((road_class_2_100 == 0 & road_class_1_100 == 0 & road_class_3_100 < quantile(road_class_3_100, .5)))  
+print(nrow(a))
+print(nrow(b))
+print(nrow(c))
+#85 65 177
+
+methodID = switch(df_type,  "tr_hp"=1,"tr_mlp" =2,"f"=3  ) 
+totest = switch(methodID,a,b,c)
+
+ 
+others = setdiff(df_model, totest)
+orderedall=rbind(totest, others) #order data
+nrow(orderedall)
+
+#each time use 7% of the data satisfying with the conditions for testing. 
+#test_size = floor(0.07*nrow(df_model)) # 30  is about 20% of traffic, use a consistent size about 7% of data
+test_size = floor(0.07*nrow(df_model)) # 8  is about 6% of traffic, use a consistent size about 2% of data
+
+test = sample(nrow(totest), size = test_size) # sample 20% from e.g. traffic and then use others as training 
+training = setdiff(seq_len(nrow(df_model)), test)
+
+#XGB = xgboost_LUR(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 300, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7) 
+#RF = rf_LUR(orderedall, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+#LA = Lasso(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
+
+
+
+INLA = INLA_crossvali2(d = orderedall, dp =orderedall, formula = formula, covnames = covnames,   typecrossvali = "non-spatial", family = "gaussian",training=training, test=test)
+#cbind(LA,RF,XGB,INLA)
+}  
+
+#tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+#tr_lmp= lapply(1:nboot, df_type ="tr_mlp", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+#far= lapply(1:nboot, df_type ="f", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+
+tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =d, y_var = y_var, sp2_cv)%>%data.frame() 
+tr_lmp= lapply(1:nboot, df_type ="tr_mlp", df_model =d, y_var = y_var, sp2_cv)%>%data.frame() 
+far= lapply(1:nboot, df_type ="f", df_model =d, y_var = y_var, sp2_cv)%>%data.frame() 
+
+F1 = function(m, pre, f=quote(summary), nvaria) {apply(pre[, seq(m, ncol(pre), by =nvaria)], 1, f)}
+
+nv = 1# number of algorithms.
+cv_traffic= data.frame(sapply(1:nv, F1, tr_hp, mean,nv)) 
+names(cv_traffic) = paste0(c("LA", "RF", "XGB", "INLA"), "_tr_hp")
+
+cv_bg = data.frame(sapply(1:nv, F1, tr_lmp, mean,nv)) 
+names(cv_bg) =  paste0(c("LA", "RF", "XGB", "INLA"),"_tr_lmp")
+
+cv_far = data.frame(sapply(1:nv, F1, far, mean,nv)) 
+names(cv_far) =  paste0(c("LA", "RF", "XGB", "INLA"),"_far")
+cbind(cv_traffic, cv_bg, cv_far)
+```
+
+
+```{r}
+
+sp2 = cbind(cv_traffic, cv_bg, cv_far)
+stargazer(t(sp2), summary = F, digits = 2)
+stargazer(t(sp2), summary = F, digits = 1)
+```
+
+##### SP3
+ 
+@params df_type: name of the type considered (e.g. traffic)
+@params dfall: mergedall
+@params df_model: merged
+
+```{r cv_sp3}
+sp3_cv =  function(n, df_type= c("traffic", "background", "industrial") , df_all, df_model, y_var) {
+  
+  set.seed(n)
+    
+  totest = df_all%>%filter(AirQualityStationType==df_type) %>%dplyr::select(colnames(df_model))
+  others = setdiff(df_model, totest)
+  orderedall=rbind(totest, others)
+   
+  test_size = floor(0.07 * nrow(df_model)) # 30  is about 20% of traffic, use a consistent size about 7% of data
+  test = sample(nrow(totest), size = test_size) # sample 20% from e.g. traffic and then use others as training 
+  training = setdiff(seq_len(nrow(df_model)), test)
+
+  XGB = xgboost_LUR(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring,  max_depth =6, gamma=5, eta =0.007, nrounds = 3000, xgb_lambda = 2, xgb_alpha = 0, subsample = 0.7) 
+  RF = rf_LUR(orderedall, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+  LA = Lasso(orderedall, y_varname= y_var, training=training, test=test, grepstring =varstring, vis1 = F)
+  cbind(LA,RF,XGB)
+}  
+
+sp_tra = lapply(1:nboot, df_type ="traffic", df_all = mergedall, df_model =merged, y_var = y_var, sp3_cv)%>%data.frame() 
+sp_bg= lapply(1:nboot, df_type ="background",df_all = mergedall, df_model =merged, y_var = y_var, sp3_cv)%>%data.frame() 
+
+
+F1 = function(m, pre, f=quote(summary), nvaria) {apply(pre[, seq(m, ncol(pre), by =nvaria)], 1, f)}
+
+nv = 3# number of algorithms.
+cv_traffic= data.frame(sapply(1:nv, F1, sp_tra, mean,nv)) 
+names(cv_traffic) = paste0(c("LA", "RF", "XGB"), "_tra")
+
+cv_bg = data.frame(sapply(1:nv, F1, sp_bg, mean,nv)) 
+names(cv_bg) =  paste0(c("LA", "RF", "XGB"),"_bg")
+cbind(cv_traffic, cv_bg)
+#server: combine
+```
+
+for a single method (testing purpose)
+```{r rf_sp3, eval = F}
+sp3_rf_cv =  function(n, df_type , df , y_var) {
+  set.seed(n)
+  test_size =  30 #floor(0.2*nrow(df_type)) #30 is about 20% of traffic, use a consistent size about 7% of data
+   
+  test = sample(nrow(df_type), size = test_size) # sample 20% from e.g. traffic and then use others as training 
+  training = setdiff(seq_len(nrow(df)), test)
+ 
+  rf_LUR(df, numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+}  
+Vrf_tra = lapply(1:nboot, df =orderedall, df_type=traffic, y_var = y_var,sp3_rf_cv)
+Vrf_tra = data.frame(RF = rowMeans(data.frame(Vrf_tra)))
+Vrf_tra
+
+Vrf_b= lapply(1:nboot, df =orderedall, df_type=background, y_var = y_var,sp3_rf_cv)
+Vrf_b = data.frame(RF = rowMeans(data.frame(Vrf_b)))
+Vrf_b
+#server: combine
+```
+
+
+#### more on random forest
+##### 1. test the number of variables needed and pdp
+##### 2. uncertainty assessment: quantile rf
+
+1. If using OOB, more variables (> larger than about 20) may always lead to error increase, because each tree is weaker, but when aggregating them the error may be different, therefore here using CV. No big difference between 25-50. May just leave all in as the spatial pattern will be different. 
+
+```{r}
+n =1
+df =merged
+set.seed(n)
+smp_size <- floor(0.8 * nrow(df)) 
+
+training<- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+ 
+y_denl = df[,y_var]
+y_denl_test = y_denl[test] 
+x_p = df%>%dplyr::select(-y_var) 
+s.seq <- sort(c( seq(10, 40, by = 3), 
+                  seq(41, ncol(x_p), by = 5) ), decreasing = T)
+
+# collect results in list
+qrf.elim <- oob.mse <-cv<- list()
+
+# save model and OOB error of current fit  
+
+ 
+ini = ranger(x=x_p, y=y_denl, num.threads = 10, # set the number of CPUs
+                             ,importance = "permutation")
+qrf.elim[[1]] <- ini
+oob.mse[[1]] <- qrf.elim[[1]]$prediction.error
+cv[[1]] <- sqrt(qrf.elim[[1]]$prediction.error)+1
+
+l.covar.sel <- ncol(x_p)
+
+# Iterate through number of retained covariates           
+for( ii in 1:length(s.seq) ){
+  # Get importance, decreasingly ordered
+ 
+  t.imp <- qrf.elim[[ii]]$variable.importance[ 
+    order(qrf.elim[[ii]]$variable.importance, decreasing = T) ]
+
+  qrf.elim[[ii+1]] <- ranger(y = y_denl, x= x_p[, names(t.imp[1:s.seq[ii]])], num.trees = 1000,
+                             
+                             num.threads = 20, # set the number of CPUs
+                             importance = "permutation")
+  oob.mse[[ii+1]] <- qrf.elim[[ii+1]]$prediction.error
+  out = rf_LUR(df[, c(names(t.imp[1:s.seq[ii]]), y_var)], numtrees =  1000, mtry = NULL, vis1 = F,y_varname= y_var, training=training, test=test, grepstring =varstring)
+  cv[[ii+1]] = out[1]
+  
+}
+
+# Prepare a data frame for plot
+elim.oob <- data.frame(elim.n = c(ncol(x_p), s.seq[1:length(s.seq)]), 
+                       elim.OOBe = unlist(oob.mse), cv = unlist(cv) )
+
+
+## ----plot-selection-path,fig.align='center',echo=FALSE,fig.height = 5,out.width='0.8\\textwidth',fig.cap = "Path of out-of-bag mean squared error as covariates are removed. Minimum is found at 55 covariates."----
+
+plot(elim.oob$elim.n[2:(length(elim.oob$elim.n) )], elim.oob$cv[2:(length(elim.oob$elim.n))], 
+     ylab = "cv (rmse)",
+     xlab = "n covariates", 
+     pch = 20)
+abline(v = elim.oob$cv[ which.min(elim.oob$cv)], lty = "dotted")
+ 
+```
+
+2. As the last step is always the same as linear regression (as we take the mean), the unaggregated predictions (second last layer, or terninal node response value) may be used for uncertainty assessment. Does this applys to all the ML method?
+
+```{r, eval=FALSE}
+rf.selected <- qrf.elim[[ which.min(elim.oob$elim.OOBe)]]
+
+t.imp <- rf.selected$variable.importance[ 
+  order(rf.selected$variable.importance, decreasing = T)]
+
+# 6 most important covariates
+t.6 <- names( t.imp[ 1:6 ] )
+
+# Create partial dependence plots for the 6 most important covariates 
+# list with 6 plots
+l.plots <- lapply(t.6, 
+                  function(n.var){ 
+                    plotPartial(partial(rf.selected, 
+                                        pred.var = n.var, 
+                                        train =x_p ))   } )
+# Create layout for the resulting trellis plots (Package lattice)
+grid.arrange(l.plots[[1]], l.plots[[2]], l.plots[[3]], 
+             l.plots[[4]], l.plots[[5]], l.plots[[6]], ncol = 2)
+
+
+```
+
+```{r quntileinlarf, eval = F}
+source("INLA_util.R")
+for (n in 1:2){
+covnames0 <- c("nightlight_450", "population_1000", "population_3000",
+               "road_class_1_5000", "road_class_2_100", "road_class_3_300", "trop_mean_filt",
+               "road_class_3_3000", "road_class_1_100", "road_class_3_100"
+               , "road_class_3_5000", "road_class_1_300", "road_class_1_500",
+                "road_class_2_1000", "nightlight_3150", "road_class_2_300", "road_class_3_1000", "temperature_2m_7")
+
+
+df = mergedall
+set.seed(n)
+smp_size <- floor(0.8 * nrow(df)) 
+
+training <- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+ 
+y_denl = df[,y_var]
+y_denl_test = y_denl[test] 
+x_p = df%>%dplyr::select(matches(varstring))%>%dplyr::select(-y_var)
+ 
+quantRF <- ranger(x = x_p[training,],
+                     y = y_denl[training], mtry = NULL, num.trees = 1000,
+                     quantreg = T) 
+# compute predictions (mean) for each validation site
+pred <- predict(quantRF, data = x_p[test,], what = mean)
+
+
+## ----investigate-single-point,echo=FALSE,fig.pos='!h',fig.height=5,fig.width=4,fig.align='center', out.width='0.4\\textwidth',fig.cap= "Histogram of predictive distribution for one single prediction point (dotted lines: 90 \\% prediction interval, dashed line: mean prediction)."----
+
+## predict 0.01, 0.02,..., 0.99 quantiles for validation data
+pred.distribution <- predict(quantRF,
+                                data = x_p[test,], 
+                                type = "quantiles",
+                                quantiles = seq(0.01, 0.99, by = 0.01))
+
+ 
+ 
+t.quant90 <- cbind( 
+  pred.distribution$predictions[, "quantile= 0.05"],
+  pred.distribution$predictions[, "quantile= 0.95"])
+# INLA
+
+d <- df[, c("mean_value", "Longitude", "Latitude", covnames0)]
+
+# covnames0 <- NULL
+covnames <- c("b0", covnames0)  # covnames is intercept and covnames0
+
+d$y <- d$mean_value # response
+d$coox <- d$Longitude
+d$cooy <- d$Latitude
+d$b0 <- 1 # intercept
+d$real <- d$y
+dp <- d
+  dtraining <- d[training, ]
+  dptest <- dp[test, ]
+  # Fit model
+  lres <- fnFitModelINLA(dtraining, dptest, covnames, TFPOSTERIORSAMPLES = FALSE, formulanew = NULL)
+  # Get predictions
+  dptest <- fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+  coordi = c(mergedall$Longitude, mergedall$Latitude)
+  p <- matrix(coordi, ncol = 2)
+  tr = p[training,] %>%  
+  sf::st_multipoint() 
+    
+  te = p[test,] %>% 
+  st_multipoint()
+  
+  inla_90= cbind(dptest$pred_ll90,dptest$pred_ul90)
+  rf_90 = t.quant90
+    plot(inla_90[,1], ylim = c(-30,65), col = "red", typ = "l")
+lines(rf_90[,1])
+lines(inla_90[,2], col = "red")
+lines(rf_90[,2])
+  p = ggplot()+geom_sf(data = te, color = "red")+geom_sf(data=tr)
+  plot(p)
+  val <- APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
+  val
+  val <- APMtools::error_matrix(validation =y_denl_test, prediction = predictions(pred))
+  val
+
+}
+```
+
+```{r}
+save(inla_90, file = "inla_90.rda")
+save(rf_90, file = "rf_90.rda")
+```
+ 
+
+```{r}
+## ----quantRF,cache=TRUE-------------------------------------------
+# Fit quantile regression forest 
+df = mergedall
+set.seed(1)
+smp_size <- floor(0.8 * nrow(df)) 
+
+training <- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+ 
+y_denl = df[,y_var]
+y_denl_test = y_denl[test] 
+x_p = df%>%dplyr::select(matches(varstring))%>%dplyr::select(-y_var)
+ 
+ 
+quantRF <- ranger(x = x_p[training,],
+                     y = y_denl[training], mtry = NULL, num.trees = 1000,
+                     quantreg = T) 
+# compute predictions (mean) for each validation site
+pred <- predict(quantRF, data = x_p[test,], what = mean)
+
+
+## ----investigate-single-point,echo=FALSE,fig.pos='!h',fig.height=5,fig.width=4,fig.align='center', out.width='0.4\\textwidth',fig.cap= "Histogram of predictive distribution for one single prediction point (dotted lines: 90 \\% prediction interval, dashed line: mean prediction)."----
+
+## predict 0.01, 0.02,..., 0.99 quantiles for validation data
+pred.distribution <- predict(quantRF,
+                                data = x_p[test,], 
+                                type = "quantiles",
+                                quantiles = seq(0.01, 0.99, by = 0.01))
+
+# plot predictive distribution for one site
+ 
+hist( pred.distribution$predictions[1,], 
+      col = "grey", main = "",
+      xlab = "predicted NO2", breaks = 12)
+
+# add 90 % prediction interval and mean (dashed) to plot
+abline(v = c( pred.distribution$predictions[1, "quantile= 0.05"],
+              pred.distribution$predictions[1, "quantile= 0.95"]), 
+       lty = "dotted")
+abline(v = pred$predictions[1], lty = "dashed")
+
+
+## ----create-intervall-plot,fig.height=5,fig.align='center',echo=FALSE, out.width='0.8\\textwidth',fig.cap= "Coverage of 90 \\%-prediction intervals computed by model-based boostrap."----
+
+# get 90% quantiles for each point
+ 
+t.quant90 <- cbind( 
+  pred.distribution$predictions[, "quantile= 0.05"],
+  pred.distribution$predictions[, "quantile= 0.95"])
+
+# get index for ranking in the plot
+t.ix <- sort( pred$predictions, index.return = T )$ix
+
+# plot predictions in increasing order
+plot(
+  pred$predictions[t.ix], type = "n",
+  ylim = range(c(t.quant90,  pred$predictions, y_denl[test])),
+  xlab = "rank of predictions",  # Me: predictors?
+  ylab =  "NO2" 
+) 
+
+# add prediction intervals
+segments(
+  1:length( y_denl_test ),
+  t.lower <- (t.quant90[,1])[t.ix],
+  1:length(y_denl_test ),
+  t.upper <- (t.quant90[,2])[t.ix],
+  col = "grey"
+)
+
+# select colour for dots outside of intervals
+t.col <- sapply(
+  1:length( t.ix ),
+  function( i, x, lower, upper ){
+    as.integer( cut( x[i], c( -Inf, lower[i]-0.000001, 
+                              x[i], upper[i]+0.000001, Inf ) ) )
+  },
+  x = y_denl_test[t.ix],
+  lower = t.lower, upper = t.upper
+)
+
+# add observed values on top 
+points(
+  1:length( y_denl_test) ,
+ y_denl_test[t.ix], cex = 0.7,
+  pch = c( 16, 1, 16)[t.col],
+  col = c( "darkgreen", "black", "darkgreen" )[t.col]
+)
+points(pred$predictions[t.ix], pch = 16, cex = 0.6, col = "grey60")
+
+# Add meaningfull legend
+legend( "topleft", 
+        bty = "n", cex = 0.85,
+        pch = c( NA, 16, 1, 16 ), pt.cex = 0.6, lwd = 1,
+        lty = c( 1, NA, NA, NA ), 
+        col = c( "grey", "grey60", "black", "darkgreen" ), 
+        seg.len = 0.8,
+        legend = c(
+          "90 %-prediction interval", 
+          paste0("prediction (n = ", nrow(x_p[test,]), ")"),
+          paste0("observation within interval (n = ", 
+                 sum( t.col %in% c(2) ), ")" ),
+          paste0("observation outside interval (n = ", 
+                 sum( t.col %in% c(1,3)), ", ", 
+                 round(sum(t.col %in% c(1,3)) / 
+                         nrow(x_p[training,])*100,1), "%)") )
+)
+
+
+
+```
+```{r, eval =T}
+## ----create-coverage-probabilty-plots,fig.align='center', fig.pos = "h", fig.width=4,fig.height=4.5, out.width='0.45\\textwidth',fig.cap="Coverage probabilities of one-sided prediction intervals"----
+
+# Coverage probabilities plot
+# create sequence of nominal probabilities 
+ss <- seq(0,1,0.01)
+# compute coverage for sequence
+t.prop.inside <- sapply(ss, function(ii){
+  boot.quantile <-  t( apply(pred.distribution$predictions, 1, quantile, 
+                             probs = c(0,ii) ) )[,2]
+  return( sum(boot.quantile <= y_denl_test)/nrow(x_p[test,]) )
+})
+
+plot(x = ss, y = t.prop.inside[length(ss):1], 
+     type = "l", asp = 1,
+     ylab = "coverage probabilities", 
+     xlab="nominal probabilities" )
+# add 1:1-line  
+abline(0,1, lty = 2, col = "grey60")
+# add lines of the two-sided 90 %-prediction interval
+abline(v = c(0.05, 0.95), lty = "dotted", col = "grey20")
+
+
+## ----session-info,results='asis'----------------------------------
+#sessionInfo() 
+
+
+## ----export-r-code,echo=FALSE,result="hide"-----------------------
+# purl("OpenGeoHub-machine-learning-training-2.Rnw")
+
+```
+
+
+
+
+
