@@ -596,3 +596,110 @@ apply(data.frame(VLA),1, mean, na.rm=T)
 
 plotspcv(VLA)
 
+
+####
+#SP2 constomed CV
+#=====================
+
+ 
+#- "tr_hp": close to roads, high population
+#- "tr_mlp": close to roads, middle-low population 
+#- "f": far away from roads 
+
+ 
+INLA_crossvali2 =  function(n, test, training, d, dp, formula, covnames, typecrossvali = "non-spatial", family = "gaussian"){
+  
+  dtraining = d[training, ]
+  dptest = dp[test, ]
+  
+  if(family == "gaussian"){
+    lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "gaussian")
+  }
+  if(family == "Gamma"){
+    lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "Gamma")
+  }
+  if(family == "lognormal"){
+    lres = fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = "lognormal")}
+  # Get predictions
+  dptest = fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+  # Goodness of fit
+  val = APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
+  val = c(val, cor = cor(dptest$real, dptest$pred_mean))
+  inlacrps = crps(y =dptest$real, family = "norm", mean = dptest$pred_mean, sd =dptest$pred_sd) 
+  
+  
+  (val = c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
+           covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
+           covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50),
+           meancrps = mean(inlacrps),
+           mediancrps = median(inlacrps)))
+  return(val)
+} 
+
+ 
+# Variables for stacked generalization
+# d$lasso = d$lasso10f_pre
+# d$rf = d$rf10f_pre
+# d$xgb = d$xgb10f_pre
+d$Countrycode  = as.factor(mergedall$Countrycode)
+d$MeasurementType  = as.factor(mergedall$MeasurementType)
+d$AirQualityStationType = as.factor(mergedall$AirQualityStationType)
+d$AirQualityStationArea = as.factor(mergedall$AirQualityStationArea)
+d$urbantype = as.factor(mergedall$urbantype)
+ 
+ 
+sp2_cv =  function(n, df_type= c("tr_hp", "tr_mlp", "f") , df_model, y_var) {
+  
+  set.seed(n)
+  a= df_model%>%filter((road_class_2_100 > 0 | road_class_1_100 > 0|road_class_3_100>quantile(road_class_3_100, .75)) & population_1000 > quantile(population_1000, 0.75))  
+  #traffic_lmpop 
+  b= df_model%>%filter((road_class_2_100 > 0 | road_class_1_100 > 0 |road_class_3_100 > quantile(road_class_3_100, .75)) & population_1000 < quantile(population_1000, 0.5))   
+  
+  #fartr_highpop
+  c= df_model%>%filter((road_class_2_100 == 0 & road_class_1_100 == 0 & road_class_3_100 < quantile(road_class_3_100, .5)))  
+  print(nrow(a))
+  print(nrow(b))
+  print(nrow(c))
+  #85 65 177
+  
+  methodID = switch(df_type,  "tr_hp"=1,"tr_mlp" =2,"f"=3  ) 
+  totest = switch(methodID,a,b,c)
+  
+  
+  others = setdiff(df_model, totest)
+  orderedall=rbind(totest, others) #order data
+  nrow(orderedall)
+  
+  #each time use 7% of the data satisfying with the conditions for testing. 
+  #test_size = floor(0.07*nrow(df_model)) # 30  is about 20% of traffic, use a consistent size about 7% of data
+  test_size = floor(0.07*nrow(df_model)) # 8  is about 6% of traffic, use a consistent size about 2% of data
+  
+  test = sample(nrow(totest), size = test_size) # sample 20% from e.g. traffic and then use others as training 
+  training = setdiff(seq_len(nrow(df_model)), test)
+
+  INLA_crossvali2(d = orderedall, dp =orderedall, formula = formula, covnames = covnames,   typecrossvali = "non-spatial", family = "gaussian",training=training, test=test)
+ 
+}  
+
+tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+tr_lmp= lapply(1:nboot, df_type ="tr_mlp", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+far= lapply(1:nboot, df_type ="f", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+
+#tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =d, y_var = y_var, sp2_cv)%>%data.frame() 
+#tr_lmp= lapply(1:nboot, df_type ="tr_mlp", df_model =d, y_var = y_var, sp2_cv)%>%data.frame() 
+#far= lapply(1:nboot, df_type ="f", df_model =d, y_var = y_var, sp2_cv)%>%data.frame() 
+
+F1 = function(m, pre, f=quote(summary), nvaria) {apply(pre[, seq(m, ncol(pre), by =nvaria)], 1, f)}
+
+nv = 1# number of algorithms.
+cv_traffic= data.frame(sapply(1:nv, F1, tr_hp, mean,nv)) 
+names(cv_traffic) = paste0(c("INLA"), "_tr_hp")
+
+cv_bg = data.frame(sapply(1:nv, F1, tr_lmp, mean,nv)) 
+names(cv_bg) =  paste0(c("INLA"),"_tr_lmp")
+
+cv_far = data.frame(sapply(1:nv, F1, far, mean,nv)) 
+names(cv_far) =  paste0(c( "INLA"),"_far")
+cbind(cv_traffic, cv_bg, cv_far)
+ 
+
