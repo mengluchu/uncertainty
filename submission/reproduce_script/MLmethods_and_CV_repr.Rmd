@@ -34,6 +34,7 @@ nboot = 20  # number of bootstraps
 y_var = "mean_value"
 prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
 varstring = paste(prestring,y_var,sep="|")
+remove_stations = F # if true, remove stations with more than 25% of missing values according to hourly data.
 ```
 
 Prepare the dataset for modeling， removed stations with more than 25% of missing values
@@ -42,11 +43,13 @@ Prepare the dataset for modeling， removed stations with more than 25% of missi
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
 
 #load("~/Documents/GitHub/uncertainty/missingstation.rda") #msname
-file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/missingstation.rda?raw=true"
-load(url(file_url)) # remove stations contain more less than 25% of data
+if (remove_stations == T)
+  {
+  file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/missingstation.rda?raw=true"
+  load(url(file_url)) # remove stations contain more less than 25% of data
 
-mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
-
+  mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
+}
 
 if (resolution ==100)
 {
@@ -548,7 +551,7 @@ far= lapply(1:nboot, df_type ="f", df_model =merged, y_var = y_var, sp2_cv)%>%da
 
 F1 = function(m, pre, f=quote(summary), nvaria) {apply(pre[, seq(m, ncol(pre), by =nvaria)], 1, f)}
 
-nv = 1# number of algorithms.
+nv = 3# number of algorithms.
 cv_traffic= data.frame(sapply(1:nv, F1, tr_hp, mean,nv)) 
 names(cv_traffic) = paste0(c("LA", "RF", "XGB" ), "_tr_hp")
 

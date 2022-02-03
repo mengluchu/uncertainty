@@ -1,4 +1,7 @@
 #devtools::install_github("mengluchu/APMtools") 
+resolution = 100 
+remove_stations =F
+
 library(INLA)
 library(APMtools)
 library(dplyr)
@@ -8,11 +11,49 @@ library(dismo)
 h2o.init(nthreads=-1)
 source("https://raw.githubusercontent.com/mengluchu/uncertainty/master/MLmodeling//INLA/INLA_util.R")
 
+ensemble= function(d, n, y_var= "y", prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi" ){
+  print(n)
+  # Split data
+  smp_size <- floor(0.8 * nrow(d)) 
+  set.seed(n)
+  training <- sample(seq_len(nrow(d)), size = smp_size)
+  test <- seq_len(nrow(d))[-training] 
+  # Fit model
+  
+  dptest <- d[test, ]
+  ytest = dptest[,y_var]
+  x_var = d%>%dplyr::select(matches(prestring))%>%names() 
+  td = d%>%dplyr::select(c(x_var, y_var))
+  td = td[training, ]
+  
+  merged_hex = as.h2o(td)
+  dptest= as.h2o(dptest)
+  rf = h2o.randomForest(y = y_var , x= x_var, training_frame = merged_hex, ntrees =2,  nfolds =2, keep_cross_validation_predictions = T, seed =1 )
+  xgb = h2o.xgboost(y = y_var , x= x_var, training_frame = merged_hex, nfolds =2, ntrees =3, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, keep_cross_validation_predictions = T, seed =1 )
+  las = h2o.glm(y = y_var , x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =2, keep_cross_validation_predictions = T, seed =1 )
+  
+  ens = h2o.stackedEnsemble(y = y_var, x= x_var, training_frame = merged_hex, base_models = c(rf, xgb, las))
+  dtest <- fnMLPredictionsAll(d=d, training = training, test = test)
+  dtesth2o = as.h2o(dtest)
+  print(h2o.performance(ens, newdata = dtesth2o))
+  print(h2o.predict(ens, newdata = dtesth2o))
+  pred = as.data.frame(h2o.predict(object =ens, newdata = dtesth2o))$predict 
+  
+  val = APMtools::error_matrix(validation = ytest, prediction = pred)
+  
+  h2o.removeAll()
+  return(val)
+}
 ############## run for 100 m resolution
-resolution = 100 
 
 d <- read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
-
+if (remove_stations == T)
+{
+  file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/missingstation.rda?raw=true"
+  load(url(file_url)) # remove stations contain more less than 25% of data
+  
+  d =d%>%filter(!(AirQualityStation %in% msname)) #474
+}
 if (resolution ==100)
 {
   d = d%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
@@ -72,36 +113,3 @@ covprob95     0.3623711
 covprob90     0.3211340
 covprob50     0.1453608'
 
-ensemble= function(d, n, y_var= "y", prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi" ){
-  print(n)
-  # Split data
-  smp_size <- floor(0.8 * nrow(d)) 
-  set.seed(n)
-  training <- sample(seq_len(nrow(d)), size = smp_size)
-  test <- seq_len(nrow(d))[-training] 
-  # Fit model
-  
-  dptest <- d[test, ]
-  ytest = dptest[,y_var]
-  x_var = d%>%dplyr::select(matches(prestring))%>%names() 
-  td = d%>%dplyr::select(c(x_var, y_var))
-  td = td[training, ]
-  
-  merged_hex = as.h2o(td)
-  dptest= as.h2o(dptest)
-  rf = h2o.randomForest(y = y_var , x= x_var, training_frame = merged_hex, ntrees =2,  nfolds =2, keep_cross_validation_predictions = T, seed =1 )
-  xgb = h2o.xgboost(y = y_var , x= x_var, training_frame = merged_hex, nfolds =2, ntrees =3, eta =  0.007, subsample = 0.7, max_depth = 6, gamma = 5, reg_lambda =2, reg_alpha = 0, keep_cross_validation_predictions = T, seed =1 )
-  las = h2o.glm(y = y_var , x= x_var, training_frame = merged_hex, alpha = 1,  nfolds =2, keep_cross_validation_predictions = T, seed =1 )
-  
-  ens = h2o.stackedEnsemble(y = y_var, x= x_var, training_frame = merged_hex, base_models = c(rf, xgb, las))
-  dtest <- fnMLPredictionsAll(d=d, training = training, test = test)
-  dtesth2o = as.h2o(dtest)
-  print(h2o.performance(ens, newdata = dtesth2o))
-  print(h2o.predict(ens, newdata = dtesth2o))
-  pred = as.data.frame(h2o.predict(object =ens, newdata = dtesth2o))$predict 
-  
-  val = APMtools::error_matrix(validation = ytest, prediction = pred)
-  
-  h2o.removeAll()
-  return(val)
-}

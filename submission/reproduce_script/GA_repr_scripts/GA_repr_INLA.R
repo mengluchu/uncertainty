@@ -1,4 +1,5 @@
 rm(list = ls())
+remove_stations = F # if true, remove stations with more than 25% of missing values according to hourly data.
 #remove.packages("INLA")
 #install.packages("INLA",repos=c(getOption("repos"),INLA="https://inla.r-inla-download.org/R/testing"), dep=TRUE)
 #install.packages("INLA",repos=c(getOption("repos"),INLA="https://inla.r-inla-download.org/R/stable"), dep=TRUE)
@@ -382,6 +383,73 @@ plotspcv= function(result){
   mapview(m3['medcrps'],layer.name= "median_CRPS",col.regions =rev(brewer.pal(11, "PiYG")), at = seq(0, 5.5, 0.5)) + mapview(locations_sf["urbantype_chara"],col.regions = c(brewer.pal(3, "Paired")[2],brewer.pal(3, "Accent")[1:2],brewer.pal(3, "Dark2")[1]), layer.name= "NO2", cex = 4)
 }
 
+#' @param n Number of iteration 
+#' @param d Data frame with data for estimation that contains coordinates (coox, cooy), response variable (y) and covariates
+#' @param dp Data frame with data for prediction that contains coordinates (coox, cooy), and covariates
+#' @param spatialsample if doing spatial sampling for validation, i.e. sample less in dense areas but more in sparse areas so that the points sampled are even in space. This may however not be needed in air pollution mapping, where the ground stations are dense in places where it should be. 
+#' If \code{covnames} includes an intercept, \code{d} needs to have column of 1s for the intercept
+#' @param covnames Vector with the names of the intercept and covariates to be included in the formula
+#' @return Vector with the cross-validation results
+INLA_stack_crossvali =  function(n, d, formula, covnames, spatialsample = F,family = "gaussian"){
+  
+  print(n)
+  # Split data
+  smp_size <- floor(0.2 * nrow(d)) 
+  set.seed(n)
+  
+  
+  if(!(spatialsample)){
+    test <- sample(seq_len(nrow(d)), size = smp_size)
+  }
+  if(spatialsample){
+    # The validation data needs to spatially represent the whole region where the prevalence is predicted
+    # We use locations of a spatially representative sample of the prediction surface
+    # To obtain a valid data set, X% of the observations are sampled without replacement where
+    # each observation has a probability of selection proportional to the area of the Voronoi polygon
+    # surrounding its location, that is, the area closest to the location relative to the surrounding points
+    p <- matrix(c(d$coox, d$cooy), ncol = 2)
+    v <- dismo::voronoi(p) # extent?
+    prob_selection <- area(v)/sum(area(v))
+    test<- sample(seq_len(nrow(d)), size = smp_size, prob = prob_selection, replace = FALSE)
+  }
+  
+  
+  training <- seq_len(nrow(d))[-test] 
+  # Fit model
+  dtraining <- d[training, ]
+  dptest <- d[test, ]
+  
+  # INI CODE MENG
+  # Add to d[, training] 3 variables with names lasso, rf, xgb that are predictions at locations coox and cooy calculated using cross-validation with the dataset d[, training]
+  dtraining <- cbind(dtraining, fnMLPredictionsCV(d=d, training = training))
+  
+  # Add to dp[test, ] 3 variables with names lasso, rf, xgb that are predictions at locations coox and cooy calculated using all data in d[, training]
+  
+  dptest <- cbind(dptest,  fnMLPredictionsAll(d=d, training = training, test = test))
+  
+  # END CODE MENG
+  
+  
+  # Fit model
+  lres <-  fnFitModelINLA(dtraining, dptest, formula, covnames, TFPOSTERIORSAMPLES = FALSE, family = family)
+  # Get predictions
+  dptest <- fnGetPredictions(lres[[1]], lres[[2]], lres[[3]], dtraining, dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 3)
+  
+  # Goodness of fit
+  val <- APMtools::error_matrix(validation = dptest$real, prediction = dptest$pred_mean)
+  val <- c(val, cor = cor(dptest$real, dptest$pred_mean))
+  #print(val)
+  inlacrps = crps(y =dptest$real, family = "norm", mean = dptest$pred_mean, sd =dptest$pred_sd) 
+  
+  val = c(val, covprob95 = mean(dptest$pred_ll <= dptest$real &  dptest$real <= dptest$pred_ul),  # 95% coverage probabilities
+          covprob90 = mean(dptest$pred_ll90 <= dptest$real &  dptest$real <= dptest$pred_ul90),
+          covprob50 = mean(dptest$pred_ll50 <= dptest$real &  dptest$real <= dptest$pred_ul50),
+          meancrps = mean(inlacrps),
+          mediancrps = median(inlacrps))
+  
+  
+  return(val)
+} 
 
 ####################
 # INLA
@@ -394,8 +462,14 @@ covnames = c("b0", "nightlight_450", "population_1000", "population_3000",
 # data used
 ###########################
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
-file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/missingstation.rda?raw=true"
-load(url(file_url)) # remove stations contain more less than 25% of data
+if (remove_stations == T)
+{
+  file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/missingstation.rda?raw=true"
+  load(url(file_url)) # remove stations contain more less than 25% of data
+  
+  mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
+}
+
 
 mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
 
@@ -411,30 +485,27 @@ if (resolution ==100)
 {
   mergedall = mergedall%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
 }  
-
+mergedall$b0 =1 
+# select certain variables, exlcude lat lon, country code, etc. 
 merged= mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
 
-# ####################################
-# merged is the final dataset to use
-######################################
-
-
+ 
 #======================================
 # Data for prediction
 #====================
+#d2: select covnames, add y, b0, coox, cooy
+#-----------
 
-d2= merged%>%dplyr::select(covnames)%>%scale()%>%data.frame
+d2= mergedall%>%dplyr::select(covnames)%>%scale()%>%data.frame
 d2$b0 = 1 # intercept
-d2$y = d$mean_value #     # For GAMMA distribution
-d2$coox = d$Longitude
-d2$cooy = d$Latitude
+d2$y = mergedall$mean_value #     # For GAMMA distribution
+d2$coox = mergedall$Longitude
+d2$cooy = mergedall$Latitude
 
-d2$real = d$y
+d2$real = mergedall$y
 
 #spatial and non-spatial model
 formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
-
-
 
 lres <- fnFitModelINLA(d2, dp = d2, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
 lres
@@ -498,7 +569,9 @@ colnames(data_pred) <- c("pred_mean", "pred_ll", "pred_ul", "Longitude", "Latitu
 # predictions, figure 9 manuscript
 #=================================
 
-resdf = data.frame(observation =d$y, prediction_mean = data_pred$pred_mean, prediction_upper = data_pred$pred_ul,prediction_lower = data_pred$pred_ll, lat =d$Latitude, lon = d$Longitude)
+resdf = data.frame(observation =d2$y, prediction_mean = data_pred$pred_mean, 
+                   prediction_upper = data_pred$pred_ul,prediction_lower = data_pred$pred_ll, 
+                   lat =mergedall$Latitude, lon = mergedall$Longitude)
 
 gres = gather(resdf, "key", "value",-lat, -lon)
 
@@ -517,7 +590,8 @@ ggsave("pred.png",height = 10, width = 10)
 ## differences between prediction and observations, figure 2, supplementary
 ##=============================================
 
-res_dif = data.frame(obs_predmean = d$y- data_pred$pred_mean,   obs_predul = d$y- data_pred$pred_ul, obs_predll = d$y- data_pred$pred_ll,  lat =d$Latitude, lon = d$Longitude)
+res_dif = data.frame(obs_predmean = d2$y- data_pred$pred_mean,   obs_predul = d2$y- data_pred$pred_ul, 
+                     obs_predll = d2$y- data_pred$pred_ll,  lat =mergedall$Latitude, lon = mergedall$Longitude)
 gres = gather(res_dif, "key", "value",-lat, -lon)
 
 ggplot(gres, aes(lon,lat)) + 
@@ -543,7 +617,6 @@ proj <- inla.mesh.projector(lres[[3]], xlim = rang[, 1], ylim = rang[, 2], dims 
 mean_field <- inla.mesh.project(proj, lres[[1]]$summary.random$s$mean)
 sd_field   <- inla.mesh.project(proj, lres[[1]]$summary.random$s$sd)
 
-
 dat <- expand.grid(x = proj$x, y = proj$y)
 dat$mean_field <- as.vector(mean_field)
 dat$sd_field <- as.vector(sd_field)
@@ -568,48 +641,14 @@ grid.arrange(gmean, gsd)
 #=====================
 # non-spatial Cross-validation, INLA and INLA-G
 #========================
-VLAg = lapply(1:20, FUN = INLA_crossvali, d = d, dp = d, formula = formula, covnames = covnames, 
+VLAg = lapply(1:20, FUN = INLA_crossvali, d = d2, dp = d2, formula = formula, covnames = covnames, 
               typecrossvali = "non-spatial", family = "gaussian")
 
-VLAma = lapply(1:20, FUN = INLA_crossvali, d = d, dp = d, formula = formula, covnames = covnames, 
+VLAma = lapply(1:20, FUN = INLA_crossvali, d = d2, dp = d2, formula = formula, covnames = covnames, 
                typecrossvali = "non-spatial", family = "Gamma")
 
 (VLA = data.frame(LA = rowMeans(data.frame(VLAma))))
 (VLAg = data.frame(LA = rowMeans(data.frame(VLAmag))))
-
-#=====================================
-#SPblock
-#==================
-
-#get the spatial points and make the grid
-locations_sf = st_as_sf(mergedall, coords = c("Longitude","Latitude"), crs=4642)
-
-locations_sf$Latitude = mergedall$Latitude
-locations_sf$Longitude = mergedall$Longitude
-grid1 = st_make_grid(locations_sf, 2) #"2" is the cell-size. 64 grids if 1 degree #20 grids
-grid1%>%plot  
-
-stc = st_join(st_sf(grid1), locations_sf,join=st_intersects )
-stc$grp = sapply(st_equals(stc), max)
-merged = mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
-
-d = data.frame(na.omit(stc))%>%dplyr::select(c(colnames(merged), 'grp', "Longitude", "Latitude"))%>%
-  mutate(grp = as.factor(grp))
-
-d$y = d$mean_value #     # For GAMMA distribution
-d$coox = d$Longitude
-d$cooy = d$Latitude
-d$b0 = 1 # intercept
-d$real = d$y
- 
-n = d$grp%>%unique()%>%length() # number of grid cells
-
-VLA = lapply(1:n, FUN = INLA_cvsp, d = d, dp = d, formula = formula, covnames = covnames,  typecrossvali = "non-spatial", family = "gaussian")
-
-apply(data.frame(VLA),1, mean, na.rm=T)
-
-
-plotspcv(VLA)
 
 
 ####
@@ -651,18 +690,7 @@ INLA_crossvali2 =  function(n, test, training, d, dp, formula, covnames, typecro
   return(val)
 } 
 
- 
-# Variables for stacked generalization
-# d$lasso = d$lasso10f_pre
-# d$rf = d$rf10f_pre
-# d$xgb = d$xgb10f_pre
-d$Countrycode  = as.factor(mergedall$Countrycode)
-d$MeasurementType  = as.factor(mergedall$MeasurementType)
-d$AirQualityStationType = as.factor(mergedall$AirQualityStationType)
-d$AirQualityStationArea = as.factor(mergedall$AirQualityStationArea)
-d$urbantype = as.factor(mergedall$urbantype)
- 
- 
+
 sp2_cv =  function(n, df_type= c("tr_hp", "tr_mlp", "f") , df_model, y_var) {
   
   set.seed(n)
@@ -717,4 +745,115 @@ cv_far = data.frame(sapply(1:nv, F1, far, mean,nv))
 names(cv_far) =  paste0(c( "INLA"),"_far")
 cbind(cv_traffic, cv_bg, cv_far)
  
+
+###=================
+#PI please see also PI  
+###==================
+df = mergedall
+ 
+num.trees = 1000  
+set.seed(1) # use the same training and test as other algorithms. 
+smp_size <- floor(0.8 * nrow(df)) 
+
+training <- sample(seq_len(nrow(df)), size = smp_size)
+test = seq_len(nrow(df))[-training] 
+dtraining <- d2[training, ]
+dptest <- d2[test, ]
+
+lres = fnFitModelINLA(d= dtraining, dp = dptest, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "gaussian")
+res = lres[[1]]
+#res = improved.result
+stk.full = lres[[2]]
+mesh = lres[[3]]
+dres = fnGetPredictions(res, stk.full, mesh, d =dtraining, dp=dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+
+lres = fnFitModelINLA(d= dtraining, dp = dptest, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "Gamma")
+res = lres[[1]]
+#res = improved.result
+stk.full = lres[[2]]
+mesh = lres[[3]]
+dres2 = fnGetPredictions(res, stk.full, mesh, d =dtraining, dp=dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
+
+
+# Get predictions. NUMPOSTSAMPLES = -1 calculated with estimation data, 0 with prediction data, 1 with inla.posterior.samples()
+#  ysim = rnorm(n = nrow(dtest), mean = dres$pred_mean, sd = dres$pred_sd)
+#plot(ysim, typ = "l")
+inlacrps = crps(y =dptest$real, family = "norm", mean = dres$pred_mean, sd =dres$pred_sd) 
+# plot(y_denl_test)
+#lines(dres$pred_ul)
+# lines(dres$pred_ll, col = "red")
+
+df1 = data.frame(cbind( dres$pred_ll90, dres$pred_ul90,  dres2$pred_ll90, dres2$pred_ul90, id = 1:nrow(data.frame(rf_90)),y_denl_test ))
+
+names(df1) = c( "INLA_L90", "INLA_U90","INLA-G_L90", "INLA-G_U90","id", "test")
+# plot
+
+df1 = df1%>%  gather(variable, value, -id, -test)
+
+ggplot(df1)+aes(x = id, y = value, colour = variable)+geom_line()+
+  geom_point(aes(y=test), colour= "black")+
+  scale_color_brewer(palette="Set1")+labs(x = "test points", y = "NO2", colour = "prediction intervals")
+#
+ggsave("INLA_pred.png")
+
+#########
+#
+#stack INLA
+
+# Variables for stacked generalization
+d = d2
+d$lasso = mergedall$lasso10f_pre
+d$rf = mergedall$rf10f_pre
+d$xgb = mergedall$xgb10f_pre
+
+d$Countrycode  = as.factor(mergedall$Countrycode)
+d$MeasurementType  = as.factor(mergedall$MeasurementType)
+d$AirQualityStationType = as.factor(mergedall$AirQualityStationType)
+d$AirQualityStationArea = as.factor(mergedall$AirQualityStationArea)
+d$urbantype = as.factor(mergedall$urbantype)
+
+
+covnames <- c("lasso", "rf", "xgb")
+formula <- as.formula("y ~ 0 + f(lasso, model = 'clinear', range = c(0, 1), initial = 1/3) +
+                         f(rf, model = 'clinear', range = c(0, 1), initial = 1/3) +
+                         f(xgb, model = 'clinear', range = c(0, 1), initial = 1/3) + f(s, model = spde)")
+
+VLA <- lapply(1:20, FUN = INLA_stack_crossvali, d = d, formula = formula, covnames = covnames, family="gaussian")
+(VLA <- data.frame(LA = rowMeans(data.frame(VLA))))
+
+
+
+#=====================================
+#SPblock
+#==================
+
+#get the spatial points and make the grid
+locations_sf = st_as_sf(mergedall, coords = c("Longitude","Latitude"), crs=4642)
+
+locations_sf$Latitude = mergedall$Latitude
+locations_sf$Longitude = mergedall$Longitude
+grid1 = st_make_grid(locations_sf, 2) #"2" is the cell-size. 64 grids if 1 degree #20 grids
+grid1%>%plot  
+
+stc = st_join(st_sf(grid1), locations_sf,join=st_intersects )
+stc$grp = sapply(st_equals(stc), max)
+merged = mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
+
+dsp = data.frame(na.omit(stc))%>%dplyr::select(c(colnames(merged), 'grp', "Longitude", "Latitude"))%>%
+  mutate(grp = as.factor(grp))
+
+dsp$y = dsp$mean_value #     # For GAMMA distribution
+dsp$coox = dsp$Longitude
+dsp$cooy = dsp$Latitude
+dsp$b0 = 1 # intercept
+dsp$real = dsp$y
+
+n = dsp$grp%>%unique()%>%length() # number of grid cells
+
+VLA = lapply(1:n, FUN = INLA_cvsp, d = dsp, dp = dsp, formula = formula, covnames = covnames,  typecrossvali = "non-spatial", family = "gaussian")
+
+apply(data.frame(VLA),1, mean, na.rm=T)
+
+
+plotspcv(VLA)
 

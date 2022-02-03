@@ -1,5 +1,5 @@
 # Spatial blocked CV
-
+remove_stations = F
 ipak <- function(pkg){
   
   new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
@@ -19,9 +19,13 @@ library("RColorBrewer")
 source("~/Documents/GitHub/uncertainty/MLmodeling/INLA/INLA_util.R")
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
 
-load("~/Documents/GitHub/uncertainty/missingstation.rda") #msname
-mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
-
+if (remove_stations == T)
+{
+  file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/missingstation.rda?raw=true"
+  load(url(file_url)) # remove stations contain more less than 25% of data
+  
+  mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
+}
 nrow(mergedall)
 resolution =100 # resolution of grid
 nboot = 20  # number of bootstraps

@@ -1,4 +1,4 @@
-
+remove_stations =F 
 #==========================================
 # test distributin, figure 1 manuscript
 #============================================
@@ -9,10 +9,14 @@ library(ggpubr)
 library(goft) # for gamma test
 
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
-file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/missingstation.rda?raw=true"
-load(url(file_url)) # remove stations contain more less than 25% of data
-
-d =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
+if (remove_stations == T)
+{
+  file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/missingstation.rda?raw=true"
+  load(url(file_url)) # remove stations contain more less than 25% of data
+  
+  mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
+}
+d = mergedall
 d$y = d$mean_value # 
 shapiro.test(d$y)
 gamma_test(d$y) #goft

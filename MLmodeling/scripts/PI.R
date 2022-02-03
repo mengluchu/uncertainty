@@ -34,6 +34,12 @@ prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi|Traffic"
 varstring = paste(prestring,y_var,sep="|")
  
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+#load("~/Documents/GitHub/uncertainty/missingstation.rda") #msname
+file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/missingstation.rda?raw=true"
+load(url(file_url)) # remove stations contain more less than 25% of data
+
+mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
+
 traffic = read.csv2("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/Traffic.csv", sep  = ";",na.strings="---")
 #mergedall = read.csv("~/Documents/GitHub/uncertainty/data_vis_exp/DENL17_uc.csv")
 #traffic = read.csv2("~/Documents/GitHub/uncertainty/data_vis_exp/Traffic.csv", sep  = ";",na.strings="---")
