@@ -19,8 +19,16 @@ ipak(packages)
 
 install_github("mengluchu/APMtools") 
 library(APMtools)
-#ls("package:APMtools") 
+
+
+# may need to download the shapefile
+#"https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/shapefiles/"
+
+shapefile <- readOGR(dsn = "~/Documents/GitHub/uncertainty/data_vis_exp/shapefiles/", layer = "shape2")
+
+ 
 # INLA FUNCTIONS
+
 #' Creates triangulated mesh to fit a spatial model using INLA and SPDE
 #' 
 #' @param coo coordinates to create the mesh
@@ -374,10 +382,7 @@ plotspcv= function(result){
   mapview(m3['medcrps'],layer.name= "median_CRPS",col.regions =rev(brewer.pal(11, "PiYG")), at = seq(0, 5.5, 0.5)) + mapview(locations_sf["urbantype_chara"],col.regions = c(brewer.pal(3, "Paired")[2],brewer.pal(3, "Accent")[1:2],brewer.pal(3, "Dark2")[1]), layer.name= "NO2", cex = 4)
 }
 
-# data
-#shapefile <- readOGR(dsn = "~/Documents/GitHub/uncertainty/shapefiles/", layer = "shape2")
 
- 
 ####################
 # INLA
 ####################
@@ -393,6 +398,8 @@ file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data
 load(url(file_url)) # remove stations contain more less than 25% of data
 
 mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
+
+
 
 
 if (resolution ==100)
@@ -485,6 +492,7 @@ colnames(data_pred) <- c("pred_mean", "pred_ll", "pred_ul", "Longitude", "Latitu
 #==================================
 # predictions, figure 9 manuscript
 #=================================
+
 resdf = data.frame(observation =d$y, prediction_mean = data_pred$pred_mean, prediction_upper = data_pred$pred_ul,prediction_lower = data_pred$pred_ll, lat =d$Latitude, lon = d$Longitude)
 
 gres = gather(resdf, "key", "value",-lat, -lon)
