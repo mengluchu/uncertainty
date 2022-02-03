@@ -385,11 +385,13 @@ covnames = c("b0", "nightlight_450", "population_1000", "population_3000",
              "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
              "trop_mean_filt", "road_class_1_100")
 
- 
+####################
 # data used
+###########################
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/missingstation.rda?raw=true"
+load(url(file_url)) # remove stations contain more less than 25% of data
 
-load("~/Documents/GitHub/uncertainty/data_vis_exp/missingstation.rda") #msname
 mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
 
 
