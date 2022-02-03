@@ -1,3 +1,5 @@
+# Spatial blocked CV
+
 ipak <- function(pkg){
   
   new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
@@ -10,18 +12,25 @@ ipak(packages)
 install_github("mengluchu/APMtools") 
 library(APMtools)
 ls("package:APMtools") 
-#source("https://raw.githubusercontent.com/mengluchu/uncertainty/master/MLmodeling//INLA/INLA_util.R")
-source("~/Documents/GitHub/uncertainty/MLmodeling/scripts/INLA/INLA_util.R")
-mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
 library("mapview")
 library("RColorBrewer")
 
+#source("https://raw.githubusercontent.com/mengluchu/uncertainty/master/MLmodeling//INLA/INLA_util.R")
+source("~/Documents/GitHub/uncertainty/MLmodeling/INLA/INLA_util.R")
+mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
+
+load("~/Documents/GitHub/uncertainty/missingstation.rda") #msname
+mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
+
+nrow(mergedall)
 resolution =100 # resolution of grid
 nboot = 20  # number of bootstraps
 y_var = "mean_value"
 prestring =  "road|nightlight|population|temp|wind|trop|indu|elev|radi"
 varstring = paste(prestring,y_var,sep="|")
 
+
+# preprocessing
 if (resolution ==100)
 {
   mergedall = mergedall%>%dplyr::select(-c(industry_25,industry_50,road_class_1_25,road_class_1_50,road_class_2_25,road_class_2_50,   road_class_3_25,road_class_3_50))
@@ -29,8 +38,9 @@ if (resolution ==100)
 
 merged = mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
 table(mergedall$urbantype_chara)
-
-
+locations_sf = st_as_sf(mergedall, coords = c("Longitude","Latitude"), crs=4642)
+ 
+# INLA
 INLA_cvsp =  function(n, d, dp, formula, covnames, typecrossvali = "non-spatial", family = "gaussian"){
   print(n)
   # Split data
@@ -64,7 +74,9 @@ INLA_cvsp =  function(n, d, dp, formula, covnames, typecrossvali = "non-spatial"
   return(val)
 } 
 
-rf_la_spcv =  function(n,d, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+#RF
+
+rf_la_spcv =  function(n,d, y_var,typecrossvali = "non-spatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
    
   d$id = 1 :nrow(d) # assign a new id because the rowname does not match the index. because rf_lasso_LUR takes indices for traing and testing.
   X<-split(d,  d$grp)
@@ -75,8 +87,9 @@ rf_la_spcv =  function(n,d, y_var,typecrossvali = "crossvalinotspatial", coordi 
   rf_Lasso_LUR(d, numtrees =  2000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =prestring)
 } 
 
+#XGB
 
-xgb_spcv =  function(n,d, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+xgb_spcv =  function(n,d, y_var, coordi = c(mergedall$Longitude, mergedall$Latitude)) {
   
   d$id = 1 :nrow(d) # assign a new id because the rowname does not match the index. because rf_lasso_LUR takes indices for traing and testing.
   X<-split(d,  d$grp)
@@ -87,7 +100,7 @@ xgb_spcv =  function(n,d, y_var,typecrossvali = "crossvalinotspatial", coordi = 
   
 } 
 
-qrf_spcv =  function(n,d, y_var,typecrossvali = "crossvalinotspatial", coordi = c(mergedall$Longitude, mergedall$Latitude)) {
+qrf_spcv =  function(n,d, y_var, coordi = c(mergedall$Longitude, mergedall$Latitude)) {
   
   d$id = 1 :nrow(d) # assign a new id because the rowname does not match the index. because rf_lasso_LUR takes indices for traing and testing.
   X<-split(d,  d$grp)
@@ -96,13 +109,11 @@ qrf_spcv =  function(n,d, y_var,typecrossvali = "crossvalinotspatial", coordi = 
   training = setdiff(d$id, test) 
   q_rf_LUR(d, numtrees =  2000, mtry = NULL,  y_varname= y_var, training=training, test=test, grepstring =varstring)} 
 
-} 
+ 
 
  
 
 # data
-locations_sf = st_as_sf(mergedall, coords = c("Longitude","Latitude"), crs=4642)
-
 locations_sf$Latitude = mergedall$Latitude
 locations_sf$Longitude = mergedall$Longitude
 grid1 = st_make_grid(locations_sf, 2) # 64 grids #20 grids
@@ -110,6 +121,7 @@ grid1%>%plot
 
 stc = st_join(st_sf(grid1), locations_sf,join=st_intersects )
 stc$grp = sapply(st_equals(stc), max)
+
 merged = mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
 
 d = data.frame(na.omit(stc))%>%dplyr::select(c(colnames(merged), 'grp', "Longitude", "Latitude"))%>%
@@ -120,18 +132,11 @@ d$coox = d$Longitude
 d$cooy = d$Latitude
 d$b0 = 1 # intercept
 d$real = d$y
-# Variables for stacked generalization
-# d$lasso = d$lasso10f_pre
-# d$rf = d$rf10f_pre
-# d$xgb = d$xgb10f_pre
-names(d)
 
 
 covnames = c("b0", "nightlight_450", "population_1000", "population_3000", 
              "road_class_1_5000", "road_class_2_100", "road_class_3_300",  
              "trop_mean_filt", "road_class_1_100")
-
-#, "Countrycode",  "urbantype"
 
 formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)"))
 
@@ -139,32 +144,32 @@ formula = as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(
 # Cross-validation
 n = d$grp%>%unique()%>%length()
 
-#VLA = lapply(1:20, FUN = INLA_cvsp, d = d, dp = d, formula = formula, covnames = covnames,  typecrossvali = "non-spatial", family = "gaussian")
-rfla= lapply(1:20, d =d, y_var = y_var,rf_la_spcv)
-xgb= lapply(1:20, d =d, y_var = y_var,xgb_spcv)
-qrf= lapply(1:20, d =d, y_var = y_var,qrf_spcv)
+#VLA = lapply(1:n,  d = d, dp = d, formula = formula, covnames = covnames,  typecrossvali = "non-spatial", family = "gaussian", INLA_cvsp)
 
-#rfla = data.frame(RFLA = rowMeans(data.frame(rfla)))
+rfla= lapply(1:n , d =d, y_var = y_var,rf_la_spcv)
+xgb= lapply(1:n , d =d, y_var = y_var,xgb_spcv)
+qrf= lapply(1:n , d =d, y_var = y_var,qrf_spcv)
+
+#data.frame(RFLA = rowMeans(data.frame(rfla)))
  
+result = rfla
 
-plotspcv= function(result){
+
+plotspcv= function(result, name = "rf"){
 
 VLAdf = as.data.frame(result) 
-names(VLAdf)= paste0("CV", 1:20)
- 
-#data.frame(xgbcv,h2o.cross_validation_fold_assignment(xgb))
-#h2o.cross_validation_fold_assignment(xgb) 
- 
+names(VLAdf)= paste0("CV", 1:nboot)
 
-merged2 = na.omit(stc%>%dplyr::select(c(colnames(merged), grp)))
-m3 = distinct(merged2)
+
+merged2 = na.omit(stc%>%dplyr::select( grp,Longitude)) # add one variable to remove NA
+m3 = distinct(merged2%>%dplyr::select( grp))
 plot(m3)
 m3$r2 = unlist(ifelse(VLAdf[7,]> 0.1, VLAdf["rsq",], 0.1))
  
 
 m3$medcrps = unlist(VLAdf['mediancrps',]) 
 
-
+ 
 mapviewOptions(
   basemaps = c("OpenStreetMap.Mapnik","Esri.OceanBasemap")
   , raster.palette = colorRampPalette(rev(brewer.pal(9, "PiYG")))
@@ -175,18 +180,36 @@ mapviewOptions(
 )
 
 plot(m3['r2'])
-mapview(m3['r2'],layer.name= "R2",col.regions =rev(brewer.pal(11, "PiYG")), at = seq(0.1, 0.9, 0.1)) + mapview(locations_sf["urbantype_chara"],col.regions = c(brewer.pal(3, "Paired")[2],brewer.pal(3, "Accent")[1:2],brewer.pal(3, "Dark2")[1]), layer.name= "NO2", cex = 4)
-#mapshot(a, file = paste0(getwd(), "/R2map.png")) 
+a=mapview(m3['r2'],layer.name= "R2",col.regions =rev(brewer.pal(11, "PiYG")), 
+        at = seq(0.1, 0.9, 0.1))+
+  mapview(locations_sf["urbantype_chara"],col.regions = c(brewer.pal(3, "Paired")[2],brewer.pal(3, "Accent")[1:2],brewer.pal(3, "Dark2")[1]), layer.name= "NO2", cex = 4)
+#mapshot(a, file =  paste0("~/Documents/GitHub/uncertainty/R2_",name,".png")) # might have to do with safari
 
-mapview(m3['medcrps'],layer.name= "median_CRPS",col.regions =rev(brewer.pal(11, "PiYG")), at = seq(0, 5.5, 0.5)) + mapview(locations_sf["urbantype_chara"],col.regions = c(brewer.pal(3, "Paired")[2],brewer.pal(3, "Accent")[1:2],brewer.pal(3, "Dark2")[1]), layer.name= "NO2", cex = 4)
+b=mapview(m3['medcrps'],layer.name= "median_CRPS",
+        col.regions =rev(brewer.pal(11, "PiYG")), at = seq(0, 5.5, 0.5)) + 
+  mapview(locations_sf["urbantype_chara"],
+          col.regions = c(brewer.pal(3, "Paired")[2],brewer.pal(3, "Accent")[1:2],
+                          brewer.pal(3, "Dark2")[1]), layer.name= "NO2", cex = 4)
+#mapshot(b, file = paste0("~/Documents/GitHub/uncertainty/medcrps_",name,".png")) 
+return(list(a, b))
 }
-apply(data.frame(xgb),1, mean, na.rm=T)
-apply(data.frame(rfla),1, mean, na.rm=T)
+
+ 
+#apply(data.frame(xgb),1, mean, na.rm=T)
+#apply(data.frame(rfla),1, mean, na.rm=T)
 #apply(data.frame(VLA),1, mean, na.rm=T)
 
-
+# Manuscript figure 2 and 3. 
 #plotspcv(VLA)
-plotspcv(rfla)
+rfp = plotspcv(rfla, "rf")
+rfp[[1]]
+rfp[[2]]
+xgbp = plotspcv(xgb, "xgb")
+xgbp[[1]]
+xgbp[[2]]
 
+#h2o method, but can not do it for INLA
+#data.frame(xgbcv,h2o.cross_validation_fold_assignment(xgb))
+#h2o.cross_validation_fold_assignment(xgb) 
 
  

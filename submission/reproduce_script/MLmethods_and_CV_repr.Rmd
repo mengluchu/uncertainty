@@ -41,7 +41,10 @@ Prepare the dataset for modeling， removed stations with more than 25% of missi
 ```{r}
 mergedall = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
 
-load("~/Documents/GitHub/uncertainty/missingstation.rda") #msname
+#load("~/Documents/GitHub/uncertainty/missingstation.rda") #msname
+file_url <- "https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/missingstation.rda?raw=true"
+load(url(file_url)) # remove stations contain more less than 25% of data
+
 mergedall =mergedall%>%filter(!(AirQualityStation %in% msname)) #474
 
 
@@ -428,7 +431,7 @@ Sp1 is purely spatial, sp2 and sp3 more specific for air quality, based on the l
 - "tr_mlp": close to roads, middle-low population 
 - "f": far away from roads 
 
-```{r}
+```{r INLA, eval=FALSE}
 source("~/Documents/GitHub/uncertainty/MLmodeling/INLA/INLA_util.R")
 
 INLA_crossvali2 =  function(n, test, training, d, dp, formula, covnames, typecrossvali = "non-spatial", family = "gaussian"){
@@ -459,6 +462,10 @@ INLA_crossvali2 =  function(n, test, training, d, dp, formula, covnames, typecro
            mediancrps = median(inlacrps)))
   return(val)
 } 
+
+```
+
+```{r sp2}
 
 d = read.csv("https://raw.githubusercontent.com/mengluchu/uncertainty/master/data_vis_exp/DENL17_uc.csv")
 head(d)
@@ -526,8 +533,9 @@ LA = Lasso(orderedall, y_varname= y_var, training=training, test=test, grepstrin
 
 
 
-INLA = INLA_crossvali2(d = orderedall, dp =orderedall, formula = formula, covnames = covnames,   typecrossvali = "non-spatial", family = "gaussian",training=training, test=test)
-cbind(LA,RF,XGB,INLA)
+#INLA = INLA_crossvali2(d = orderedall, dp =orderedall, formula = formula, covnames = covnames,   typecrossvali = "non-spatial", family = "gaussian",training=training, test=test)
+#cbind(LA,RF,XGB,INLA)
+cbind(LA,RF,XGB)
 }  
 
 tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
@@ -542,13 +550,13 @@ F1 = function(m, pre, f=quote(summary), nvaria) {apply(pre[, seq(m, ncol(pre), b
 
 nv = 1# number of algorithms.
 cv_traffic= data.frame(sapply(1:nv, F1, tr_hp, mean,nv)) 
-names(cv_traffic) = paste0(c("LA", "RF", "XGB", "INLA"), "_tr_hp")
+names(cv_traffic) = paste0(c("LA", "RF", "XGB" ), "_tr_hp")
 
 cv_bg = data.frame(sapply(1:nv, F1, tr_lmp, mean,nv)) 
-names(cv_bg) =  paste0(c("LA", "RF", "XGB", "INLA"),"_tr_lmp")
+names(cv_bg) =  paste0(c("LA", "RF", "XGB" ),"_tr_lmp")
 
 cv_far = data.frame(sapply(1:nv, F1, far, mean,nv)) 
-names(cv_far) =  paste0(c("LA", "RF", "XGB", "INLA"),"_far")
+names(cv_far) =  paste0(c("LA", "RF", "XGB"),"_far")
 cbind(cv_traffic, cv_bg, cv_far)
 ```
 
