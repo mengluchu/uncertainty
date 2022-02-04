@@ -256,7 +256,8 @@ fnGetPredictions = function(res, stk.full, mesh, d, dp, covnames, NUMPOSTSAMPLES
 #' @param covnames Vector with the names of the intercept and covariates to be included in the formula
 #' @param typecrossvali string that denotes if cross-validation is spatial ("crossvalispatial") or not ("crossvalinotspatial")
 #' @return Vector with the cross-validation results
-INLA_crossvali =  function(n, d, dp, formula, covnames, typecrossvali = "non-spatial", family = "gaussian"){
+INLA_crossvali =  function(n, d, dp, formula, covnames,
+                           typecrossvali = "non-spatial", family = "gaussian"){
   print(n)
   # Split data
   smp_size = floor(0.2 * nrow(d)) 
@@ -487,7 +488,7 @@ if (resolution ==100)
 }  
 mergedall$b0 =1 
 # select certain variables, exlcude lat lon, country code, etc. 
-merged= mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
+#merged= mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is actually no na in this file, but for now RF and LA doesnt deal with missing data, leave out for quick examination 
 
  
 #======================================
@@ -496,7 +497,8 @@ merged= mergedall%>%dplyr::select(matches(varstring))%>% na.omit() # there is ac
 #d2: select covnames, add y, b0, coox, cooy
 #-----------
 
-d2= mergedall%>%dplyr::select(covnames)%>%scale()%>%data.frame
+#d2= mergedall%>%dplyr::select(covnames)%>%scale()%>%data.frame
+d2= mergedall%>%dplyr::select(covnames)%>%data.frame
 d2$b0 = 1 # intercept
 d2$y = mergedall$mean_value #     # For GAMMA distribution
 d2$coox = mergedall$Longitude
@@ -661,7 +663,8 @@ VLAma = lapply(1:20, FUN = INLA_crossvali, d = d2, dp = d2, formula = formula, c
 #- "f": far away from roads 
 
  
-INLA_crossvali2 =  function(n, test, training, d, dp, formula, covnames, typecrossvali = "non-spatial", family = "gaussian"){
+INLA_crossvali2 =  function(n, test, training, d, dp, formula, covnames, 
+                            typecrossvali = "non-spatial", family = "gaussian"){
   
   dtraining = d[training, ]
   dptest = dp[test, ]
@@ -724,9 +727,9 @@ sp2_cv =  function(n, df_type= c("tr_hp", "tr_mlp", "f") , df_model, y_var) {
  
 }  
 
-tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
-tr_lmp= lapply(1:nboot, df_type ="tr_mlp", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
-far= lapply(1:nboot, df_type ="f", df_model =merged, y_var = y_var, sp2_cv)%>%data.frame() 
+tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =mergedall, y_var = y_var, sp2_cv)%>%data.frame() 
+tr_lmp= lapply(1:nboot, df_type ="tr_mlp", df_model =mergedall, y_var = y_var, sp2_cv)%>%data.frame() 
+far= lapply(1:nboot, df_type ="f", df_model =mergedall, y_var = y_var, sp2_cv)%>%data.frame() 
 
 #tr_hp = lapply(1:nboot, df_type ="tr_hp",  df_model =d, y_var = y_var, sp2_cv)%>%data.frame() 
 #tr_lmp= lapply(1:nboot, df_type ="tr_mlp", df_model =d, y_var = y_var, sp2_cv)%>%data.frame() 
@@ -751,7 +754,7 @@ cbind(cv_traffic, cv_bg, cv_far)
 ###==================
 df = mergedall
  
-num.trees = 1000  
+
 set.seed(1) # use the same training and test as other algorithms. 
 smp_size <- floor(0.8 * nrow(df)) 
 
@@ -767,6 +770,7 @@ stk.full = lres[[2]]
 mesh = lres[[3]]
 dres = fnGetPredictions(res, stk.full, mesh, d =dtraining, dp=dptest, covnames, NUMPOSTSAMPLES = 0, cutoff_exceedanceprob = 30)
 
+#GAMMA
 lres = fnFitModelINLA(d= dtraining, dp = dptest, covnames, formula = formula, TFPOSTERIORSAMPLES = TRUE, family = "Gamma")
 res = lres[[1]]
 #res = improved.result
@@ -779,11 +783,14 @@ dres2 = fnGetPredictions(res, stk.full, mesh, d =dtraining, dp=dptest, covnames,
 #  ysim = rnorm(n = nrow(dtest), mean = dres$pred_mean, sd = dres$pred_sd)
 #plot(ysim, typ = "l")
 inlacrps = crps(y =dptest$real, family = "norm", mean = dres$pred_mean, sd =dres$pred_sd) 
+inlacrps
 # plot(y_denl_test)
 #lines(dres$pred_ul)
 # lines(dres$pred_ll, col = "red")
 
-df1 = data.frame(cbind( dres$pred_ll90, dres$pred_ul90,  dres2$pred_ll90, dres2$pred_ul90, id = 1:nrow(data.frame(rf_90)),y_denl_test ))
+df1 = data.frame(cbind( dres$pred_ll90, dres$pred_ul90,
+                        dres2$pred_ll90, dres2$pred_ul90,
+                        id = 1:nrow(dptest),dptest$y ))
 
 names(df1) = c( "INLA_L90", "INLA_U90","INLA-G_L90", "INLA-G_U90","id", "test")
 # plot

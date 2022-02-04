@@ -303,7 +303,9 @@ fnMLPredictionsAll = function(d, y_var="y", training, test, prestring =  "road|n
 #' @return Vector with the cross-validation results
 #' 
 #' 
-INLA_crossvali =  function(n, d, dp, formula=as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)")), covnames, typecrossvali = "non-spatial", family = c("gaussian","Gamma","lognormal")){
+INLA_crossvali =  function(n, d, dp, 
+                           formula=as.formula(paste0('y ~ 0 + ', paste0(covnames, collapse = '+'), " + f(s, model = spde)")),
+                           covnames, typecrossvali = "non-spatial", family = c("gaussian","Gamma","lognormal")){
   print(n)
   # Split data
   smp_size = floor(0.2 * nrow(d)) 
